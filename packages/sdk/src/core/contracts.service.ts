@@ -25,6 +25,9 @@ import { CommitmentProof, Hash } from "../types/commitment.js";
 import { bigintToHex } from "../crypto.js";
 import { ContractError } from "../errors/base.error.js";
 
+/** Sentinel address used by the pools to represent the native asset. */
+const NATIVE_ASSET: Address = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+
 export class ContractInteractionsService implements ContractInteractions {
   private publicClient: PublicClient;
   private walletClient: WalletClient;
@@ -81,11 +84,13 @@ export class ContractInteractionsService implements ContractInteractions {
     precommitment: bigint,
   ): Promise<TransactionResponse> {
     try {
+      // Deposits go directly to the pool, which pulls the funds itself.
+      const { pool } = await this.getAssetConfig(asset);
       const { request } = await this.publicClient.simulateContract({
-        address: this.entrypointAddress,
-        abi: IEntrypointABI as Abi,
+        address: pool,
+        abi: IPrivacyPoolABI as Abi,
         functionName: "deposit",
-        args: [asset, amount, precommitment],
+        args: [amount, precommitment],
         value: 0n,
         account: this.account,
       });
@@ -110,9 +115,11 @@ export class ContractInteractionsService implements ContractInteractions {
     precommitment: bigint,
   ): Promise<TransactionResponse> {
     try {
+      // Resolve the native asset pool and deposit directly into it.
+      const { pool } = await this.getAssetConfig(NATIVE_ASSET);
       const { request } = await this.publicClient.simulateContract({
-        address: this.entrypointAddress,
-        abi: IEntrypointABI as Abi,
+        address: pool,
+        abi: IPrivacyPoolABI as Abi,
         functionName: "deposit",
         args: [precommitment],
         value: amount,
@@ -146,10 +153,11 @@ export class ContractInteractionsService implements ContractInteractions {
       // get pool address from scope
       const scopeData = await this.getScopeData(scope);
 
+      // The merged pool exposes a single withdrawal entry point: `relay`.
       const { request } = await this.publicClient.simulateContract({
         address: scopeData.poolAddress,
         abi: IPrivacyPoolABI as Abi,
-        functionName: "withdraw",
+        functionName: "relay",
         account: this.account.address as Address,
         args: [withdrawal, formattedProof],
       });
@@ -182,12 +190,15 @@ export class ContractInteractionsService implements ContractInteractions {
     try {
       const formattedProof = this.formatProof(withdrawalProof);
 
+      // Relay is now processed directly on the pool; resolve it from the scope.
+      const scopeData = await this.getScopeData(scope);
+
       const { request } = await this.publicClient.simulateContract({
-        address: this.entrypointAddress,
-        abi: [...(IEntrypointABI as Abi), ...(IPrivacyPoolABI as Abi)],
+        address: scopeData.poolAddress,
+        abi: IPrivacyPoolABI as Abi,
         functionName: "relay",
         account: this.account,
-        args: [withdrawal, formattedProof, scope],
+        args: [withdrawal, formattedProof],
       });
 
       return await this.executeTransaction(request);

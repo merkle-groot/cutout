@@ -7,6 +7,9 @@ import {IState} from 'interfaces/IState.sol';
 /**
  * @title IPrivacyPool
  * @notice Interface for the PrivacyPool contract
+ * @dev The pool holds its own funds, is deposited into and withdrawn from directly, and
+ *      bridges withdrawn value to L2 itself. It reads configuration (fees, ASP root, bridge
+ *      config) from the Registry (`ENTRYPOINT`) via view calls; no value routes through the Registry.
  */
 interface IPrivacyPool is IState {
   /*///////////////////////////////////////////////////////////////
@@ -16,11 +19,28 @@ interface IPrivacyPool is IState {
   /**
    * @notice Struct for the withdrawal request
    * @dev The integrity of this data is ensured by the `context` signal in the proof
-   * @param data Encoded arbitrary data used by the Entrypoint
+   * @param chainId The destination chain id to bridge the withdrawn value to
+   * @param data Encoded `RelayData`
    */
   struct Withdrawal {
     uint256 chainId;
     bytes data;
+  }
+
+  /**
+   * @notice Struct for the relay data
+   * @param recipient The recipient of the funds withdrawn from the pool
+   * @param feeRecipient The recipient of the fee
+   * @param ephemeralKey The ephemeral public key E carried with the L2 note for recipient scanning
+   * @param viewTag The off-chain scan pre-filter hint (low byte of Poseidon(ss))
+   * @param relayFeeBPS The relay fee in basis points
+   */
+  struct RelayData {
+    address recipient;
+    address feeRecipient;
+    uint256[2] ephemeralKey;
+    bytes1 viewTag;
+    uint256 relayFeeBPS;
   }
 
   /*///////////////////////////////////////////////////////////////
@@ -32,7 +52,7 @@ interface IPrivacyPool is IState {
    * @param _depositor The address of the depositor
    * @param _commitment The commitment hash
    * @param _label The deposit generated label
-   * @param _value The deposited amount
+   * @param _value The deposited amount (after vetting fees)
    * @param _precommitmentHash The deposit precommitment hash
    */
   event Deposited(
@@ -49,6 +69,23 @@ interface IPrivacyPool is IState {
   event Withdrawn(uint256 _newCommitmentHashL1, uint256 _newComitmentHashL2, uint256 _value, uint256 _spentNullifier);
 
   /**
+   * @notice Emitted when relaying a withdrawal
+   * @param _relayer The address of the relayer (caller)
+   * @param _recipient The intended recipient of the withdrawal
+   * @param _amount The withdrawn amount (before fees)
+   * @param _feeAmount The fee paid to the relayer
+   */
+  event WithdrawalRelayed(address indexed _relayer, address indexed _recipient, uint256 _amount, uint256 _feeAmount);
+
+  /**
+   * @notice Emitted alongside a relayed withdrawal to carry the L2 note scanning data
+   * @param _newCommitmentHashL2 The bridged L2 destination-note commitment hash (C_dest)
+   * @param _ephemeralKey The ephemeral public key E carried with the note for recipient scanning
+   * @param _viewTag The off-chain scan pre-filter hint (low byte of Poseidon(ss))
+   */
+  event L2Note(uint256 indexed _newCommitmentHashL2, uint256[2] _ephemeralKey, bytes1 indexed _viewTag);
+
+  /**
    * @notice Emitted when ragequitting a commitment
    * @param _ragequitter The address who ragequit
    * @param _commitment The ragequit commitment
@@ -56,6 +93,13 @@ interface IPrivacyPool is IState {
    * @param _value The ragequit amount
    */
   event Ragequit(address indexed _ragequitter, uint256 _commitment, uint256 _label, uint256 _value);
+
+  /**
+   * @notice Emitted when withdrawing accrued fees from the pool
+   * @param _recipient The address of the fees withdrawal recipient
+   * @param _amount The amount of asset withdrawn
+   */
+  event FeesWithdrawn(address _recipient, uint256 _amount);
 
   /**
    * @notice Emitted irreversibly suspending deposits
@@ -77,11 +121,6 @@ interface IPrivacyPool is IState {
   error InvalidCommitment();
 
   /**
-   * @notice Thrown when calling `withdraw` while not being the allowed processooor
-   */
-  error InvalidProcessooor();
-
-  /**
    * @notice Thrown when calling `withdraw` with a ASP or state tree depth greater or equal than the max tree depth
    */
   error InvalidTreeDepth();
@@ -90,11 +129,6 @@ interface IPrivacyPool is IState {
    * @notice Thrown when trying to deposit an amount higher than 2**128
    */
   error InvalidDepositValue();
-
-  /**
-   * @notice Thrown when providing an invalid scope for this pool
-   */
-  error ScopeMismatch();
 
   /**
    * @notice Thrown when providing an invalid context for the pool and withdrawal
@@ -116,30 +150,87 @@ interface IPrivacyPool is IState {
    */
   error OnlyOriginalDepositor();
 
+  /**
+   * @notice Thrown when trying to withdraw an invalid (zero) amount
+   */
+  error InvalidWithdrawalAmount();
+
+  /**
+   * @notice Thrown when trying to relay with a relayer fee greater than the maximum configured
+   */
+  error RelayFeeGreaterThanMax();
+
+  /**
+   * @notice Thrown when trying to deposit less than the minimum deposit amount
+   */
+  error MinimumDepositAmount();
+
+  /**
+   * @notice Thrown when trying to deposit using a precommitment that has already been used
+   */
+  error PrecommitmentAlreadyUsed();
+
+  /**
+   * @notice Thrown when the destination chain is not supported by the Registry bridge config
+   */
+  error UnsupportedChain();
+
+  /**
+   * @notice Thrown when the caller-supplied `msg.value` does not cover the required L1->L2
+   *         message/gas fees for an Arbitrum or Starknet bridge
+   */
+  error InsufficientBridgeFee();
+
+  /**
+   * @notice Thrown when the caller is not the Registry owner
+   */
+  error OnlyRegistryOwner();
+
+  /**
+   * @notice Thrown when sending less amount of native asset than required
+   */
+  error InsufficientValue();
+
+  /**
+   * @notice Thrown when failing to send native asset to an account
+   */
+  error FailedToSendNativeAsset();
+
+  /**
+   * @notice Thrown when sending native asset to an ERC20 pool
+   */
+  error NativeAssetNotAccepted();
+
   /*///////////////////////////////////////////////////////////////
                               LOGIC
   //////////////////////////////////////////////////////////////*/
 
   /**
-   * @notice Deposit funds into the Privacy Pool
-   * @dev Only callable by the Entrypoint
-   * @param _depositor The depositor address
+   * @notice Make a native asset deposit into the Privacy Pool
+   * @dev Only valid on a native asset pool. Deposited value is `msg.value`.
+   * @param _precommitment The precommitment hash
+   * @return _commitment The commitment hash
+   */
+  function deposit(uint256 _precommitment) external payable returns (uint256 _commitment);
+
+  /**
+   * @notice Make an ERC20 deposit into the Privacy Pool
+   * @dev Only valid on an ERC20 pool. Pulls `_value` from the caller.
    * @param _value The value being deposited
    * @param _precommitment The precommitment hash
    * @return _commitment The commitment hash
    */
-  function deposit(
-    address _depositor,
-    uint256 _value,
-    uint256 _precommitment
-  ) external payable returns (uint256 _commitment);
+  function deposit(uint256 _value, uint256 _precommitment) external returns (uint256 _commitment);
 
   /**
-   * @notice Privately withdraw funds by spending an existing commitment
-   * @param _w The `Withdrawal` struct
-   * @param _p The `WithdrawProof` struct
+   * @notice Privately withdraw funds by spending an existing commitment, bridging the value to L2
+   * @dev Permissionless; the caller (relayer), fee and destination are bound by the proof `context`.
+   * @dev Payable: for Arbitrum/Starknet destinations the caller prepays the L1->L2 message/gas fee
+   *      as `msg.value` (any excess is refunded). OP-Stack destinations require no `msg.value`.
+   * @param _withdrawal The `Withdrawal` struct
+   * @param _proof The `WithdrawProof` struct
    */
-  function withdraw(Withdrawal memory _w, ProofLib.WithdrawProof memory _p) external;
+  function relay(Withdrawal calldata _withdrawal, ProofLib.WithdrawProof calldata _proof) external payable;
 
   /**
    * @notice Publicly withdraw funds to original depositor without exposing secrets
@@ -151,47 +242,14 @@ interface IPrivacyPool is IState {
   /**
    * @notice Irreversibly suspends deposits
    * @dev Withdrawals can never be disabled
-   * @dev Only callable by the Entrypoint
+   * @dev Only callable by the Registry
    */
   function windDown() external;
-}
-
-/**
- * @title IPrivacyPoolSimple
- * @notice Interface for the PrivacyPool native asset implementation
- */
-interface IPrivacyPoolSimple is IPrivacyPool {
-  /*///////////////////////////////////////////////////////////////
-                              ERRORS
-  //////////////////////////////////////////////////////////////*/
 
   /**
-   * @notice Thrown when sending less amount of native asset than required
+   * @notice Withdraw accrued fees (vetting fees) from the pool
+   * @dev Only callable by the Registry owner
+   * @param _recipient The recipient of the fees
    */
-  error InsufficientValue();
-
-  /**
-   * @notice Thrown when failing to send native asset to an account
-   */
-  error FailedToSendNativeAsset();
-}
-
-/**
- * @title IPrivacyPoolComplex
- * @notice Interface for the PrivacyPool ERC20 implementation
- */
-interface IPrivacyPoolComplex is IPrivacyPool {
-  /*///////////////////////////////////////////////////////////////
-                              ERRORS
-  //////////////////////////////////////////////////////////////*/
-
-  /**
-   * @notice Thrown when sending sending any amount of native asset
-   */
-  error NativeAssetNotAccepted();
-
-  /**
-   * @notice Thrown when trying to set up a complex pool with the native asset
-   */
-  error NativeAssetNotSupported();
+  function withdrawFees(address _recipient) external;
 }

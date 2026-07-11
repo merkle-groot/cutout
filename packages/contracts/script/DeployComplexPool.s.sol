@@ -13,7 +13,7 @@ import {IPrivacyPool} from 'interfaces/IPrivacyPool.sol';
 import {ICreateX} from 'interfaces/external/ICreateX.sol';
 
 import {Entrypoint} from 'contracts/Entrypoint.sol';
-import {PrivacyPoolComplex} from 'contracts/implementations/PrivacyPoolComplex.sol';
+import {PrivacyPool} from 'contracts/PrivacyPool.sol';
 
 /*///////////////////////////////////////////////////////////////
                    COMPLEX POOL DEPLOYMENT
@@ -107,11 +107,11 @@ contract DeployComplexPool is Script {
     bytes memory _constructorArgs = abi.encode(address(entrypoint), withdrawalVerifier, ragequitVerifier, erc20Address);
 
     // Generate salt for this specific token
-    bytes11 _tokenSalt = bytes11(keccak256(abi.encodePacked(DeployLib.COMPLEX_POOL_SALT, erc20Symbol)));
+    bytes11 _tokenSalt = bytes11(keccak256(abi.encodePacked(DeployLib.TOKEN_POOL_SALT, erc20Symbol)));
 
     // Deploy pool with Create2
     address _pool = CreateX.deployCreate2(
-      DeployLib.salt(deployer, _tokenSalt), abi.encodePacked(type(PrivacyPoolComplex).creationCode, _constructorArgs)
+      DeployLib.salt(deployer, _tokenSalt), abi.encodePacked(type(PrivacyPool).creationCode, _constructorArgs)
     );
 
     return _pool;

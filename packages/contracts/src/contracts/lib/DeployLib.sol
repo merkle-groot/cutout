@@ -22,8 +22,8 @@ library DeployLib {
    */
   bytes11 internal constant ENTRYPOINT_IMPL_SALT = bytes11(keccak256('EntrypointImplementation_1'));
   bytes11 internal constant ENTRYPOINT_PROXY_SALT = bytes11(keccak256('EntrypointProxy_1'));
-  bytes11 internal constant SIMPLE_POOL_SALT = bytes11(keccak256(abi.encodePacked('PrivacyPoolSimple_1')));
-  bytes11 internal constant COMPLEX_POOL_SALT = bytes11(keccak256(abi.encodePacked('PrivacyPoolComplex_1')));
+  bytes11 internal constant NATIVE_POOL_SALT = bytes11(keccak256(abi.encodePacked('PrivacyPoolNative_1')));
+  bytes11 internal constant TOKEN_POOL_SALT = bytes11(keccak256(abi.encodePacked('PrivacyPoolToken_1')));
   bytes11 internal constant WITHDRAWAL_VERIFIER_SALT = bytes11(keccak256(abi.encodePacked('WithdrawalVerifier_1')));
   bytes11 internal constant RAGEQUIT_VERIFIER_SALT = bytes11(keccak256(abi.encodePacked('RagequitVerifier_1')));
 

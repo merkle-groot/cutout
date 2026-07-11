@@ -18,8 +18,7 @@ import {IPrivacyPool} from 'interfaces/IPrivacyPool.sol';
 import {ICreateX} from 'interfaces/external/ICreateX.sol';
 
 import {Entrypoint} from 'contracts/Entrypoint.sol';
-import {PrivacyPoolComplex} from 'contracts/implementations/PrivacyPoolComplex.sol';
-import {PrivacyPoolSimple} from 'contracts/implementations/PrivacyPoolSimple.sol';
+import {PrivacyPool} from 'contracts/PrivacyPool.sol';
 import {CommitmentVerifier} from 'contracts/verifiers/CommitmentVerifier.sol';
 import {WithdrawalVerifier} from 'contracts/verifiers/WithdrawalVerifier.sol';
 
@@ -101,11 +100,11 @@ abstract contract DeployProtocol is Script {
     _deployEntrypoint();
 
     // Deploy the native asset pool
-    _deploySimplePool(_nativePoolConfig);
+    _deployNativePool(_nativePoolConfig);
 
     // Deploy the ERC20 pools
     for (uint256 _i; _i < _tokenPoolConfigs.length; ++_i) {
-      _deployComplexPool(_tokenPoolConfigs[_i]);
+      _deployTokenPool(_tokenPoolConfigs[_i]);
     }
 
     // Save deployment data to JSON file if in broadcast mode
@@ -211,14 +210,15 @@ abstract contract DeployProtocol is Script {
     );
   }
 
-  function _deploySimplePool(PoolConfig memory _config) private {
-    // Encode constructor args
-    bytes memory constructorArgs = abi.encode(address(entrypoint), withdrawalVerifier, ragequitVerifier);
+  function _deployNativePool(PoolConfig memory _config) private {
+    // Encode constructor args (single pool contract, asset = native)
+    bytes memory constructorArgs =
+      abi.encode(address(entrypoint), withdrawalVerifier, ragequitVerifier, Constants.NATIVE_ASSET);
 
     // Deploy pool with Create2
     address _pool = CreateX.deployCreate2(
-      DeployLib.salt(deployer, DeployLib.SIMPLE_POOL_SALT),
-      abi.encodePacked(type(PrivacyPoolSimple).creationCode, constructorArgs)
+      DeployLib.salt(deployer, DeployLib.NATIVE_POOL_SALT),
+      abi.encodePacked(type(PrivacyPool).creationCode, constructorArgs)
     );
 
     // Register pool at entrypoint with defined configuration
@@ -239,7 +239,7 @@ abstract contract DeployProtocol is Script {
     // Add to deployment data
     _deploymentData.push(
       DeploymentData({
-        contractName: string.concat('PrivacyPoolSimple_', _config.symbol),
+        contractName: string.concat('PrivacyPool_', _config.symbol),
         contractAddress: _pool,
         deployer: deployer,
         deploymentBlock: block.number,
@@ -250,16 +250,16 @@ abstract contract DeployProtocol is Script {
     );
   }
 
-  function _deployComplexPool(PoolConfig memory _config) private {
+  function _deployTokenPool(PoolConfig memory _config) private {
     // Encode constructor args
     bytes memory constructorArgs =
       abi.encode(address(entrypoint), withdrawalVerifier, ragequitVerifier, address(_config.asset));
 
     // Deploy pool with Create2
-    bytes11 _tokenSalt = bytes11(keccak256(abi.encodePacked(DeployLib.COMPLEX_POOL_SALT, _config.symbol)));
+    bytes11 _tokenSalt = bytes11(keccak256(abi.encodePacked(DeployLib.TOKEN_POOL_SALT, _config.symbol)));
 
     address _pool = CreateX.deployCreate2(
-      DeployLib.salt(deployer, _tokenSalt), abi.encodePacked(type(PrivacyPoolComplex).creationCode, constructorArgs)
+      DeployLib.salt(deployer, _tokenSalt), abi.encodePacked(type(PrivacyPool).creationCode, constructorArgs)
     );
 
     // Register pool at entrypoint with defined configuration
@@ -276,7 +276,7 @@ abstract contract DeployProtocol is Script {
     // Add to deployment data
     _deploymentData.push(
       DeploymentData({
-        contractName: string.concat('PrivacyPoolComplex_', _config.symbol),
+        contractName: string.concat('PrivacyPool_', _config.symbol),
         contractAddress: _pool,
         deployer: deployer,
         deploymentBlock: block.number,

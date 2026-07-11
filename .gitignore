@@ -13,3 +13,7 @@ node_modules
 
 # Cursor rules files
 .cursorrules*
+
+# Ignore generated markdown notes/logs; keep README.md at any level
+*.md
+!README.md
