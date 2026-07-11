@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Test} from 'forge-std/Test.sol';
-import {InternalLeanIMT, LeafAlreadyExists, LeanIMTData} from 'lean-imt/InternalLeanIMT.sol';
+import {InternalLeanIMT, LeafAlreadyExists, LeanIMTData} from '@zk-kit/lean-imt.sol/InternalLeanIMT.sol';
 
 import {PoseidonT4} from 'poseidon/PoseidonT4.sol';
 
@@ -115,33 +115,33 @@ contract UnitPrivacyPool is Test {
     vm.stopPrank();
   }
 
-  modifier givenCallerIsProcessooor(address _processooor) {
-    vm.startPrank(_processooor);
-    _;
-    vm.stopPrank();
-  }
-
   modifier givenValidProof(IPrivacyPool.Withdrawal memory _w, ProofLib.WithdrawProof memory _p) {
-    // New commitment hash
+    // [0] New L1 change-note commitment hash
     _p.pubSignals[0] = bound(_p.pubSignals[0], 1, Constants.SNARK_SCALAR_FIELD - 1);
 
-    // Existing nullifier hash
-    _p.pubSignals[1] = bound(_p.pubSignals[1], 1, type(uint256).max) % Constants.SNARK_SCALAR_FIELD;
+    // [1] New L2 destination-note commitment hash (C_dest)
+    _p.pubSignals[1] = bound(_p.pubSignals[1], 1, Constants.SNARK_SCALAR_FIELD - 1);
 
-    // Withdrawn value
+    // [2] Existing nullifier hash
     _p.pubSignals[2] = bound(_p.pubSignals[2], 1, type(uint256).max) % Constants.SNARK_SCALAR_FIELD;
 
-    // State root
+    // [3] Withdrawn value
     _p.pubSignals[3] = bound(_p.pubSignals[3], 1, type(uint256).max) % Constants.SNARK_SCALAR_FIELD;
 
-    // State tree depth
-    _p.pubSignals[4] = bound(_p.pubSignals[4], 1, 32);
+    // [4] State root
+    _p.pubSignals[4] = bound(_p.pubSignals[4], 1, type(uint256).max) % Constants.SNARK_SCALAR_FIELD;
 
-    // ASP tree depth
-    _p.pubSignals[6] = bound(_p.pubSignals[6], 1, 32);
+    // [5] State tree depth
+    _p.pubSignals[5] = bound(_p.pubSignals[5], 1, 32);
 
-    // Context
-    _p.pubSignals[7] = uint256(keccak256(abi.encode(_w, _scope))) % Constants.SNARK_SCALAR_FIELD;
+    // [6] ASP root
+    _p.pubSignals[6] = bound(_p.pubSignals[6], 1, type(uint256).max) % Constants.SNARK_SCALAR_FIELD;
+
+    // [7] ASP tree depth
+    _p.pubSignals[7] = bound(_p.pubSignals[7], 1, 32);
+
+    // [8] Context
+    _p.pubSignals[8] = uint256(keccak256(abi.encode(_w, _scope))) % Constants.SNARK_SCALAR_FIELD;
 
     _;
   }
@@ -473,7 +473,7 @@ contract UnitWithdraw is UnitPrivacyPool {
     ProofLib.WithdrawProof memory _p
   )
     external
-    givenCallerIsProcessooor(_w.processooor)
+    givenCallerIsEntrypoint
     givenValidProof(_w, _p)
     givenKnownStateRoot(_p.stateRoot())
     givenLatestASPRoot(_p.ASPRoot())
@@ -481,16 +481,19 @@ contract UnitWithdraw is UnitPrivacyPool {
     _mockAndExpect(
       _WITHDRAWAL_VERIFIER,
       abi.encodeWithSignature(
-        'verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[8])', _p.pA, _p.pB, _p.pC, _p.pubSignals
+        'verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[9])', _p.pA, _p.pB, _p.pC, _p.pubSignals
       ),
       abi.encode(true)
     );
 
+    // Value is pushed to the Entrypoint, which routes/bridges it onward.
     vm.expectEmit(address(_pool));
-    emit PoolForTest.Pushed(_w.processooor, _p.pubSignals[2]);
+    emit PoolForTest.Pushed(_ENTRYPOINT, _p.withdrawnValue());
 
     vm.expectEmit(address(_pool));
-    emit IPrivacyPool.Withdrawn(_w.processooor, _p.pubSignals[2], _p.pubSignals[1], _p.pubSignals[0]);
+    emit IPrivacyPool.Withdrawn(
+      _p.newCommitmentHashL1(), _p.newCommitmentHashL2(), _p.withdrawnValue(), _p.existingNullifierHash()
+    );
 
     _pool.withdraw(_w, _p);
 
@@ -502,7 +505,7 @@ contract UnitWithdraw is UnitPrivacyPool {
     ProofLib.WithdrawProof memory _p
   )
     external
-    givenCallerIsProcessooor(_w.processooor)
+    givenCallerIsEntrypoint
     givenValidProof(_w, _p)
     givenKnownStateRoot(_p.stateRoot())
     givenLatestASPRoot(_p.ASPRoot())
@@ -514,7 +517,7 @@ contract UnitWithdraw is UnitPrivacyPool {
     _mockAndExpect(
       _WITHDRAWAL_VERIFIER,
       abi.encodeWithSignature(
-        'verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[8])', _p.pA, _p.pB, _p.pC, _p.pubSignals
+        'verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[9])', _p.pA, _p.pB, _p.pC, _p.pubSignals
       ),
       abi.encode(true)
     );
@@ -528,7 +531,7 @@ contract UnitWithdraw is UnitPrivacyPool {
     ProofLib.WithdrawProof memory _p
   )
     external
-    givenCallerIsProcessooor(_w.processooor)
+    givenCallerIsEntrypoint
     givenValidProof(_w, _p)
     givenKnownStateRoot(_p.stateRoot())
     givenLatestASPRoot(_p.ASPRoot())
@@ -536,7 +539,7 @@ contract UnitWithdraw is UnitPrivacyPool {
     _mockAndExpect(
       _WITHDRAWAL_VERIFIER,
       abi.encodeWithSignature(
-        'verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[8])', _p.pA, _p.pB, _p.pC, _p.pubSignals
+        'verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[9])', _p.pA, _p.pB, _p.pC, _p.pubSignals
       ),
       abi.encode(true)
     );
@@ -555,7 +558,7 @@ contract UnitWithdraw is UnitPrivacyPool {
     uint256 _unknownASPRoot
   )
     external
-    givenCallerIsProcessooor(_w.processooor)
+    givenCallerIsEntrypoint
     givenValidProof(_w, _p)
     givenKnownStateRoot(_p.stateRoot())
     givenLatestASPRoot(_unknownASPRoot)
@@ -574,7 +577,7 @@ contract UnitWithdraw is UnitPrivacyPool {
   function test_WithdrawWhenStateRootUnknown(
     IPrivacyPool.Withdrawal memory _w,
     ProofLib.WithdrawProof memory _p
-  ) external givenCallerIsProcessooor(_w.processooor) givenValidProof(_w, _p) {
+  ) external givenCallerIsEntrypoint givenValidProof(_w, _p) {
     // Attempt withdrawal with unknown state root
     vm.expectRevert(IPrivacyPool.UnknownStateRoot.selector);
     _pool.withdraw(_w, _p);
@@ -587,10 +590,10 @@ contract UnitWithdraw is UnitPrivacyPool {
     IPrivacyPool.Withdrawal memory _w,
     ProofLib.WithdrawProof memory _p,
     uint256 _unknownContext
-  ) external givenCallerIsProcessooor(_w.processooor) givenValidProof(_w, _p) {
+  ) external givenCallerIsEntrypoint givenValidProof(_w, _p) {
     // Setup proof with mismatched context
-    vm.assume(_unknownContext != uint256(keccak256(abi.encode(_w, _scope))));
-    _p.pubSignals[7] = _unknownContext;
+    vm.assume(_unknownContext != uint256(keccak256(abi.encode(_w, _scope))) % Constants.SNARK_SCALAR_FIELD);
+    _p.pubSignals[8] = _unknownContext;
 
     // Expect revert due to context mismatch
     vm.expectRevert(IPrivacyPool.ContextMismatch.selector);
@@ -598,18 +601,20 @@ contract UnitWithdraw is UnitPrivacyPool {
   }
 
   /**
-   * @notice Test for the withdraw function when the caller is not the processooor
+   * @notice Test for the withdraw function when the caller is not the Entrypoint
    */
-  function test_WithdrawWhenCallerIsNotProcessooor(
+  function test_WithdrawWhenCallerIsNotEntrypoint(
     address _caller,
     IPrivacyPool.Withdrawal memory _w,
     ProofLib.WithdrawProof memory _p
   ) external {
-    // Setup caller different from processooor
-    vm.assume(_caller != _w.processooor);
+    // Only the Entrypoint may drive a withdrawal
+    vm.assume(_caller != _ENTRYPOINT);
 
-    // Expect revert due to invalid processooor
-    vm.expectRevert(IPrivacyPool.InvalidProcessooor.selector);
+    // The `onlyEntrypoint` modifier fires first and reverts `OnlyEntrypoint`.
+    // (validWithdrawal's redundant InvalidProcessooor caller-check is now dead
+    // code — see L1_WITHDRAWAL_TEST_PROGRESS.md.)
+    vm.expectRevert(IState.OnlyEntrypoint.selector);
     vm.prank(_caller);
     _pool.withdraw(_w, _p);
   }
@@ -620,15 +625,15 @@ contract UnitWithdraw is UnitPrivacyPool {
   function test_WithdrawWhenTreeDepthsInvalid(
     IPrivacyPool.Withdrawal memory _w,
     ProofLib.WithdrawProof memory _p
-  ) external givenCallerIsProcessooor(_w.processooor) givenValidProof(_w, _p) {
-    // Set the state tree depth
-    _p.pubSignals[4] = 33;
+  ) external givenCallerIsEntrypoint givenValidProof(_w, _p) {
+    // Set the state tree depth ([5]) above MAX_TREE_DEPTH
+    _p.pubSignals[5] = 33;
     vm.expectRevert(IPrivacyPool.InvalidTreeDepth.selector);
     _pool.withdraw(_w, _p);
 
-    // Test ASP tree depth > MAX_TREE_DEPTH
-    _p.pubSignals[4] = 32; // Reset to valid depth
-    _p.pubSignals[6] = 33;
+    // Test ASP tree depth ([7]) > MAX_TREE_DEPTH
+    _p.pubSignals[5] = 32; // Reset to valid depth
+    _p.pubSignals[7] = 33;
 
     vm.expectRevert(IPrivacyPool.InvalidTreeDepth.selector);
     _pool.withdraw(_w, _p);

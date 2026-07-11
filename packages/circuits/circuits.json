@@ -1,11 +1,35 @@
 {
-  "commitment": {
-    "file": "commitment",
-    "template": "CommitmentHasher",
+  "commitmentL1": {
+    "file": "commitmentL1",
+    "template": "CommitmentHasherL1",
     "pubs": ["value", "label"]
+  },
+  "commitmentL2Sender": {
+    "file": "commitmentL2Sender",
+    "template": "CommitmentHasherL2Sender",
+    "pubs": ["value"]
+  },
+  "commitmentL2Withdraw": {
+    "file": "commitmentL2Withdraw",
+    "template": "CommitmentHasherL2Withdraw",
+    "pubs": ["value"]
+  },
+  "withdrawL1": {
+    "file": "withdrawL1",
+    "template": "WithdrawL1",
+    "params": [32],
+    "pubs": ["withdrawnValue", "stateRoot", "stateTreeDepth", "ASPRoot", "ASPTreeDepth", "context"]
+  },
+  "withdrawL2": {
+    "file": "withdrawL2",
+    "template": "WithdrawL2",
+    "params": [32],
+    "pubs": ["noteValue", "stateRoot", "stateTreeDepth", "context"]
   },
   "merkleTree": {
     "file": "merkleTree",
-    "template": "MerkleTreeChecker"
+    "template": "LeanIMTInclusionProof",
+    "params": [32],
+    "pubs": ["leaf", "leafIndex", "siblings", "actualDepth"]
   }
 }

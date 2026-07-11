@@ -8,19 +8,41 @@ async function main() {
     inspect: true,
   });
 
-  // artifacts output at `build/commitment` directory
-  await circomkit.compile("commitment", {
-    file: "commitment",
-    template: "CommitmentHasher",
+  // artifacts output at `build/commitmentL1` directory
+  await circomkit.compile("commitmentL1", {
+    file: "commitmentL1",
+    template: "CommitmentHasherL1",
     pubs: ["value", "label"],
   });
 
-  // artifacts output at `build/withdraw` directory
-  await circomkit.compile("withdraw", {
-    file: "withdraw",
-    template: "Withdraw",
+  // artifacts output at `build/commitmentL2Sender` directory
+  await circomkit.compile("commitmentL2Sender", {
+    file: "commitmentL2Sender",
+    template: "CommitmentHasherL2Sender",
+    pubs: ["value"],
+  });
+
+  // artifacts output at `build/commitmentL2Withdraw` directory
+  await circomkit.compile("commitmentL2Withdraw", {
+    file: "commitmentL2Withdraw",
+    template: "CommitmentHasherL2Withdraw",
+    pubs: ["value"],
+  });
+
+  // artifacts output at `build/withdrawL1` directory
+  await circomkit.compile("withdrawL1", {
+    file: "withdrawL1",
+    template: "WithdrawL1",
     params: [32],
     pubs: ["withdrawnValue", "stateRoot", "stateTreeDepth", "ASPRoot", "ASPTreeDepth", "context"],
+  });
+
+  // artifacts output at `build/withdrawL2` directory
+  await circomkit.compile("withdrawL2", {
+    file: "withdrawL2",
+    template: "WithdrawL2",
+    params: [32],
+    pubs: ["noteValue", "stateRoot", "stateTreeDepth", "context"],
   });
 
   // artifacts output at `build/merkleTree` directory

@@ -16,11 +16,10 @@ interface IPrivacyPool is IState {
   /**
    * @notice Struct for the withdrawal request
    * @dev The integrity of this data is ensured by the `context` signal in the proof
-   * @param processooor The allowed address to process the withdrawal
    * @param data Encoded arbitrary data used by the Entrypoint
    */
   struct Withdrawal {
-    address processooor;
+    uint256 chainId;
     bytes data;
   }
 
@@ -42,12 +41,12 @@ interface IPrivacyPool is IState {
 
   /**
    * @notice Emitted when processing a withdrawal
-   * @param _processooor The address which processed the withdrawal
+   * @param _newCommitmentHashL1 The new L1 change-note commitment hash
+   * @param _newComitmentHashL2 The bridged L2 destination-note commitment hash (C_dest)
    * @param _value The withdrawn amount
    * @param _spentNullifier The spent nullifier
-   * @param _newCommitment The new commitment hash
    */
-  event Withdrawn(address indexed _processooor, uint256 _value, uint256 _spentNullifier, uint256 _newCommitment);
+  event Withdrawn(uint256 _newCommitmentHashL1, uint256 _newComitmentHashL2, uint256 _value, uint256 _spentNullifier);
 
   /**
    * @notice Emitted when ragequitting a commitment

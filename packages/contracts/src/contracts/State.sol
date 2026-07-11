@@ -17,7 +17,7 @@ https://defi.sucks
 */
 
 import {Constants} from './lib/Constants.sol';
-import {InternalLeanIMT, LeanIMTData} from 'lean-imt/InternalLeanIMT.sol';
+import {InternalLeanIMT, LeanIMTData} from '@zk-kit/lean-imt.sol/InternalLeanIMT.sol';
 
 import {IEntrypoint} from 'interfaces/IEntrypoint.sol';
 import {IState} from 'interfaces/IState.sol';

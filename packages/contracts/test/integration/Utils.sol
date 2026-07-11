@@ -6,7 +6,7 @@ import {Constants} from 'test/helper/Constants.sol';
 
 import {IERC20} from '@oz/interfaces/IERC20.sol';
 import {Test} from 'forge-std/Test.sol';
-import {InternalLeanIMT, LeanIMTData} from 'lean-imt/InternalLeanIMT.sol';
+import {InternalLeanIMT, LeanIMTData} from '@zk-kit/lean-imt.sol/InternalLeanIMT.sol';
 
 import {PoseidonT2} from 'poseidon/PoseidonT2.sol';
 import {PoseidonT3} from 'poseidon/PoseidonT3.sol';

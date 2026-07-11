@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.0;
 
-import {InternalLeanIMT, LeanIMTData} from 'lean-imt/InternalLeanIMT.sol';
+import {InternalLeanIMT, LeanIMTData} from '@zk-kit/lean-imt.sol/InternalLeanIMT.sol';
 
 contract TreeBuilder {
   using InternalLeanIMT for LeanIMTData;

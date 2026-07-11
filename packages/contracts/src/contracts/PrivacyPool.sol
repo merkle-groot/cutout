@@ -42,7 +42,7 @@ abstract contract PrivacyPool is State, IPrivacyPool {
    */
   modifier validWithdrawal(Withdrawal memory _withdrawal, ProofLib.WithdrawProof memory _proof) {
     // Check caller is the allowed processooor
-    if (msg.sender != _withdrawal.processooor) revert InvalidProcessooor();
+    if (msg.sender != address(ENTRYPOINT)) revert InvalidProcessooor();
 
     // Check the context matches to ensure its integrity
     if (_proof.context() != uint256(keccak256(abi.encode(_withdrawal, SCOPE))) % Constants.SNARK_SCALAR_FIELD) {
@@ -110,7 +110,7 @@ abstract contract PrivacyPool is State, IPrivacyPool {
   function withdraw(
     Withdrawal memory _withdrawal,
     ProofLib.WithdrawProof memory _proof
-  ) external validWithdrawal(_withdrawal, _proof) {
+  ) external onlyEntrypoint validWithdrawal(_withdrawal, _proof) {
     // Verify proof with Groth16 verifier
     if (!WITHDRAWAL_VERIFIER.verifyProof(_proof.pA, _proof.pB, _proof.pC, _proof.pubSignals)) revert InvalidProof();
 
@@ -118,13 +118,13 @@ abstract contract PrivacyPool is State, IPrivacyPool {
     _spend(_proof.existingNullifierHash());
 
     // Insert new commitment in state
-    _insert(_proof.newCommitmentHash());
+    _insert(_proof.newCommitmentHashL1());
 
     // Transfer out funds to procesooor
-    _push(_withdrawal.processooor, _proof.withdrawnValue());
+    _push(address(ENTRYPOINT), _proof.withdrawnValue());
 
     emit Withdrawn(
-      _withdrawal.processooor, _proof.withdrawnValue(), _proof.existingNullifierHash(), _proof.newCommitmentHash()
+      _proof.newCommitmentHashL1(), _proof.newCommitmentHashL2(), _proof.withdrawnValue(), _proof.existingNullifierHash()
     );
   }
 

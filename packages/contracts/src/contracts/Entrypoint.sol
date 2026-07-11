@@ -20,6 +20,7 @@ import {AccessControlUpgradeable} from '@oz-upgradeable/access/AccessControlUpgr
 import {UUPSUpgradeable} from '@oz-upgradeable/proxy/utils/UUPSUpgradeable.sol';
 import {ReentrancyGuardUpgradeable} from '@oz-upgradeable/utils/ReentrancyGuardUpgradeable.sol';
 import {SafeERC20} from '@oz/token/ERC20/utils/SafeERC20.sol';
+import {BridgeMessenger} from './BridgeMessenger.sol';
 
 import {IERC20} from '@oz/interfaces/IERC20.sol';
 
@@ -33,7 +34,7 @@ import {IPrivacyPool} from 'interfaces/IPrivacyPool.sol';
  * @title Entrypoint
  * @notice Serves as the main entrypoint for a series of ASP-operated Privacy Pools
  */
-contract Entrypoint is AccessControlUpgradeable, UUPSUpgradeable, ReentrancyGuardUpgradeable, IEntrypoint {
+contract Entrypoint is AccessControlUpgradeable, UUPSUpgradeable, ReentrancyGuardUpgradeable, IEntrypoint, BridgeMessenger {
   using SafeERC20 for IERC20;
   using ProofLib for ProofLib.WithdrawProof;
 
@@ -137,8 +138,6 @@ contract Entrypoint is AccessControlUpgradeable, UUPSUpgradeable, ReentrancyGuar
   ) external nonReentrant {
     // Check withdrawn amount is non-zero
     if (_proof.withdrawnValue() == 0) revert InvalidWithdrawalAmount();
-    // Check allowed processooor is this Entrypoint
-    if (_withdrawal.processooor != address(this)) revert InvalidProcessooor();
 
     // Fetch pool by scope
     IPrivacyPool _pool = scopeToPool[_scope];
@@ -163,8 +162,11 @@ contract Entrypoint is AccessControlUpgradeable, UUPSUpgradeable, ReentrancyGuar
 
     uint256 _feeAmount = _withdrawnAmount - _amountAfterFees;
 
-    // Transfer withdrawn funds to recipient
-    _transfer(_asset, _data.recipient, _amountAfterFees);
+    // read the l2 note details
+    uint256 newCommitmentHashL2 = _proof.newCommitmentHashL2();
+
+    // Bridge withdrawn funds to l2
+    _bridge(_withdrawal.chainId, address(_asset), _amountAfterFees, newCommitmentHashL2);
     // Transfer fees to fee recipient
     _transfer(_asset, _data.feeRecipient, _feeAmount);
 
@@ -173,6 +175,7 @@ contract Entrypoint is AccessControlUpgradeable, UUPSUpgradeable, ReentrancyGuar
     if (_balanceBefore > _balanceAfter) revert InvalidPoolState();
 
     emit WithdrawalRelayed(msg.sender, _data.recipient, _asset, _withdrawnAmount, _feeAmount);
+    emit L2Note(newCommitmentHashL2, _data.ephemeralKey, _data.viewTag);
   }
 
   /*///////////////////////////////////////////////////////////////

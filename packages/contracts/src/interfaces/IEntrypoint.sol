@@ -37,6 +37,8 @@ interface IEntrypoint {
   struct RelayData {
     address recipient;
     address feeRecipient;
+    uint256[2] ephemeralKey;
+    bytes1 viewTag;
     uint256 relayFeeBPS;
   }
 
@@ -86,6 +88,14 @@ interface IEntrypoint {
   event WithdrawalRelayed(
     address indexed _relayer, address indexed _recipient, IERC20 indexed _asset, uint256 _amount, uint256 _feeAmount
   );
+
+  /**
+   * @notice Emitted when processing a withdrawal through the Entrypoint
+   * @param _newCommitmentHashL2 The bridged L2 destination-note commitment hash (C_dest)
+   * @param _ephemeralKey The ephemeral public key E carried with the note for recipient scanning
+   * @param _viewTag The off-chain scan pre-filter hint (low byte of Poseidon(ss))
+   */
+  event L2Note(uint256 indexed _newCommitmentHashL2, uint256[2] _ephemeralKey, bytes1 indexed _viewTag);
 
   /**
    * @notice Emitted when withdrawing fees from the Entrypoint

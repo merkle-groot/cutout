@@ -6,7 +6,7 @@ import {IntegrationBase} from './IntegrationBase.sol';
 import {IERC20} from '@oz/interfaces/IERC20.sol';
 
 import {PrivacyPoolComplex} from 'contracts/implementations/PrivacyPoolComplex.sol';
-import {InternalLeanIMT, LeanIMTData} from 'lean-imt/InternalLeanIMT.sol';
+import {InternalLeanIMT, LeanIMTData} from '@zk-kit/lean-imt.sol/InternalLeanIMT.sol';
 
 import {IPrivacyPool} from 'interfaces/IPrivacyPool.sol';
 import {IState} from 'interfaces/IState.sol';

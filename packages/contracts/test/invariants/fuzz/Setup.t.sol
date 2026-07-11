@@ -8,7 +8,7 @@ import {PrivacyPoolComplex} from 'contracts/implementations/PrivacyPoolComplex.s
 import {PrivacyPoolSimple} from 'contracts/implementations/PrivacyPoolSimple.sol';
 
 import {ProofLib} from 'contracts/lib/ProofLib.sol';
-import {InternalLeanIMT, LeanIMTData} from 'lean-imt/InternalLeanIMT.sol';
+import {InternalLeanIMT, LeanIMTData} from '@zk-kit/lean-imt.sol/InternalLeanIMT.sol';
 
 import {Constants} from 'test/helper/Constants.sol';
 

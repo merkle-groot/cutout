@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import {IntegrationBase} from './IntegrationBase.sol';
 
 import {ProofLib} from 'contracts/lib/ProofLib.sol';
-import {InternalLeanIMT, LeanIMTData} from 'lean-imt/InternalLeanIMT.sol';
+import {InternalLeanIMT, LeanIMTData} from '@zk-kit/lean-imt.sol/InternalLeanIMT.sol';
 
 import {IPrivacyPool} from 'interfaces/IPrivacyPool.sol';
 

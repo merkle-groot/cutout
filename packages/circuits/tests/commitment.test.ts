@@ -11,9 +11,9 @@ describe("CommitmentHasher Circuit", () => {
   const LABEL = poseidon([hexToBigInt(depositor), randomBigInt(), NONCE]);
 
   before(async () => {
-    circuit = await circomkit.WitnessTester(`commitment`, {
-      file: "commitment",
-      template: "CommitmentHasher",
+    circuit = await circomkit.WitnessTester(`commitmentL1`, {
+      file: "commitmentL1",
+      template: "CommitmentHasherL1",
       pubs: ["value", "label"],
     });
   });
