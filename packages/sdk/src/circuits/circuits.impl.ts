@@ -152,13 +152,15 @@ export class Circuits implements CircuitsInterface {
    */
   // prettier-ignore
   async downloadArtifacts(version: VersionString): Promise<Binaries> { // eslint-disable-line @typescript-eslint/no-unused-vars
-    const [commitment, withdraw] = await Promise.all([
+    const [commitment, withdrawL1, withdrawL2] = await Promise.all([
       this._downloadCircuitArtifacts(CircuitName.Commitment),
-      this._downloadCircuitArtifacts(CircuitName.Withdraw),
+      this._downloadCircuitArtifacts(CircuitName.WithdrawL1),
+      this._downloadCircuitArtifacts(CircuitName.WithdrawL2),
     ]);
     return {
       commitment,
-      withdraw,
+      withdrawL1,
+      withdrawL2,
     } as Binaries;
   }
 

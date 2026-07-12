@@ -212,6 +212,16 @@ export class WithdrawalValidationError extends RelayerError {
     );
   }
 
+  public static unsupportedDestinationChain(
+    details: string,
+  ): WithdrawalValidationError {
+    return new WithdrawalValidationError(
+      "Unsupported Mode-3 destination chain",
+      ErrorCode.CHAIN_NOT_SUPPORTED,
+      details,
+    );
+  }
+
   public static feeTooLow(details: string) {
     return new WithdrawalValidationError(
       "Fee is lower than required by relayer",

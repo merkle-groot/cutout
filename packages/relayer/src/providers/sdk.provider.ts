@@ -3,11 +3,11 @@
  */
 
 import {
-  calculateContext,
+  calculateRelayContext,
   Circuits,
   ContractInteractionsService,
   PrivacyPoolSDK,
-  Withdrawal,
+  RelayWithdrawal,
   WithdrawalProof,
   SDKError,
   type Hash,
@@ -112,14 +112,14 @@ export class SdkProvider implements SdkProviderInterface {
   }
 
   /**
-   * Calculates the context for a withdrawal.
+   * Calculates the Mode-3 relay context (`{chainId, data}` shape).
    *
-   * @param {Withdrawal} withdrawal - The withdrawal object.
+   * @param {RelayWithdrawal} withdrawal - The relay withdrawal object.
    * @param {bigint} scope - The scope value.
    * @returns {string} - The calculated context.
    */
-  calculateContext(withdrawal: Withdrawal, scope: bigint): string {
-    return calculateContext(withdrawal, scope as Hash);
+  calculateContext(withdrawal: RelayWithdrawal, scope: bigint): string {
+    return calculateRelayContext(withdrawal, scope as Hash);
   }
 
   /**

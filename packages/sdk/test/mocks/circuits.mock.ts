@@ -6,10 +6,15 @@ import {
 import { Circuits } from "../../src/circuits/index.js";
 
 export const binariesMock: Binaries = {
-  withdraw: {
+  withdrawL1: {
     wasm: new Uint8Array([1, 2, 3]),
     vkey: new Uint8Array([4, 5, 6]),
     zkey: new Uint8Array([7, 8, 9]),
+  },
+  withdrawL2: {
+    wasm: new Uint8Array([10, 11, 12]),
+    vkey: new Uint8Array([13, 14, 15]),
+    zkey: new Uint8Array([16, 17, 18]),
   },
   commitment: {
     wasm: new Uint8Array([19, 20, 21]),

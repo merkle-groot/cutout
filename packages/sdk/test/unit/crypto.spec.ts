@@ -4,16 +4,25 @@ import {
   getCommitment,
   generateMerkleProof,
   calculateContext,
+  calculateRelayContext,
+  encodeRelayData,
+  encodeL2RelayData,
   generateMasterKeys,
   generateDepositSecrets,
   generateWithdrawalSecrets,
 } from "../../src/crypto.js";
 import { poseidon } from "maci-crypto/build/ts/hashing.js";
 import { Hash, Secret } from "../../src/types/commitment.js";
-import { getAddress, Hex, keccak256 } from "viem";
+import {
+  getAddress,
+  Hex,
+  keccak256,
+  decodeAbiParameters,
+  toHex,
+} from "viem";
 import { generatePrivateKey, privateKeyToAccount, generateMnemonic, english } from "viem/accounts";
 import { SNARK_SCALAR_FIELD } from "../../src/constants.js";
-import { Withdrawal } from "../../src/index.js";
+import { Withdrawal, RelayWithdrawal, RelayData } from "../../src/index.js";
 
 const mnemonic = generateMnemonic(english);
 
@@ -130,6 +139,110 @@ describe("Crypto Utilities", () => {
         BigInt(keccak256(generatePrivateKey())) as Hash,
       );
       expect(BigInt(result) % SNARK_SCALAR_FIELD).toStrictEqual(BigInt(result));
+    });
+  });
+
+  describe("calculateRelayContext (Mode-3 L1 leg)", () => {
+    const relayData: RelayData = {
+      recipient: getAddress("0xa513E6E4b8f2a923D98304ec87F64353C4D5C853"),
+      feeRecipient: getAddress("0xa513E6E4b8f2a923D98304ec87F64353C4D5C853"),
+      ephemeralKey: [123n, 456n],
+      viewTag: toHex(7n, { size: 1 }),
+      relayFeeBPS: 0n,
+    };
+    const scope = BigInt(
+      "0x0555c5fdc167f1f1519c1b21a690de24d9be5ff0bde19447a5f28958d9256e50",
+    ) as Hash;
+
+    it("returns a scalar-field bounded value", () => {
+      const withdrawal: RelayWithdrawal = {
+        chainId: 11155420n,
+        data: encodeRelayData(relayData),
+      };
+      const result = calculateRelayContext(withdrawal, scope);
+      expect(BigInt(result) % SNARK_SCALAR_FIELD).toStrictEqual(BigInt(result));
+    });
+
+    it("does NOT collide with the L2 (processooor) context shape", () => {
+      // chainId (uint256) and processooor (address) live in structurally
+      // different tuples; a swap must produce a different hash.
+      const data = encodeRelayData(relayData);
+      const relay = calculateRelayContext({ chainId: 11155420n, data }, scope);
+      const l2 = calculateContext(
+        {
+          processooor: getAddress(
+            "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+          ),
+          data,
+        },
+        scope,
+      );
+      expect(relay).not.toStrictEqual(l2);
+    });
+  });
+
+  describe("relay data encoding", () => {
+    it("encodeRelayData round-trips the L1 payload", () => {
+      const data: RelayData = {
+        recipient: getAddress("0x70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+        feeRecipient: getAddress(
+          "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        ),
+        ephemeralKey: [
+          19277813829384n,
+          88123098120938102938n,
+        ],
+        viewTag: toHex(200n, { size: 1 }),
+        relayFeeBPS: 250n,
+      };
+      const encoded = encodeRelayData(data);
+      const [decoded] = decodeAbiParameters(
+        [
+          {
+            type: "tuple",
+            components: [
+              { name: "recipient", type: "address" },
+              { name: "feeRecipient", type: "address" },
+              { name: "ephemeralKey", type: "uint256[2]" },
+              { name: "viewTag", type: "bytes1" },
+              { name: "relayFeeBPS", type: "uint256" },
+            ],
+          },
+        ],
+        encoded,
+      );
+      expect(decoded.recipient).toStrictEqual(data.recipient);
+      expect(decoded.feeRecipient).toStrictEqual(data.feeRecipient);
+      expect(decoded.ephemeralKey).toStrictEqual(data.ephemeralKey);
+      expect(decoded.viewTag).toStrictEqual(data.viewTag);
+      expect(decoded.relayFeeBPS).toStrictEqual(data.relayFeeBPS);
+    });
+
+    it("encodeL2RelayData round-trips the L2 payload", () => {
+      const data = {
+        recipient: getAddress("0x70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+        feeRecipient: getAddress(
+          "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        ),
+        relayFeeBPS: 100n,
+      };
+      const encoded = encodeL2RelayData(data);
+      const [decoded] = decodeAbiParameters(
+        [
+          {
+            type: "tuple",
+            components: [
+              { name: "recipient", type: "address" },
+              { name: "feeRecipient", type: "address" },
+              { name: "relayFeeBPS", type: "uint256" },
+            ],
+          },
+        ],
+        encoded,
+      );
+      expect(decoded.recipient).toStrictEqual(data.recipient);
+      expect(decoded.feeRecipient).toStrictEqual(data.feeRecipient);
+      expect(decoded.relayFeeBPS).toStrictEqual(data.relayFeeBPS);
     });
   });
 });

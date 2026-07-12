@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from "express";
-import { getAddress } from "viem";
+import { getAddress, toHex } from "viem";
 import { getAssetConfig, getFeeReceiverAddress, getSignerPrivateKey } from "../../config/index.js";
-import { QuoterError } from "../../exceptions/base.exception.js";
+import { QuoterError, ValidationError } from "../../exceptions/base.exception.js";
 import { web3Provider } from "../../providers/index.js";
 import { quoteService } from "../../services/index.js";
 import { QuoteMarshall } from "../../types.js";
@@ -70,9 +70,16 @@ export async function relayQuoteHandler(
     } else {
       feeReceiverAddress = finalFeeReceiverAddress;
     }
+    // Mode-3: the signed commitment must be byte-identical to the `RelayData`
+    // the client will submit (the proof binds context over those exact bytes),
+    // so the client provides the stealth material (ephemeralKey + viewTag) it
+    // already derived when building the note. See relayer Mode-3 migration.
+    const { ephemeralKey, viewTag } = parseStealthQuoteFields(req.body);
     const withdrawalData = encodeWithdrawalData({
       feeRecipient: getAddress(feeReceiverAddress),
       recipient,
+      ephemeralKey,
+      viewTag,
       relayFeeBPS: feeBPS
     });
     const expiration = Number(new Date()) + EXPIRATION_TIME;
@@ -85,4 +92,41 @@ export async function relayQuoteHandler(
     .status(200)
     .json(res.locals.marshalResponse(quoteResponse));
 
+}
+
+/**
+ * Parse the Mode-3 stealth fields from a quote request body. Only required when
+ * the client wants a signed fee commitment (i.e. supplied a `recipient`), since
+ * the commitment must reproduce the full on-chain `RelayData`.
+ *
+ * @throws {ValidationError} If the fields are missing or malformed.
+ */
+function parseStealthQuoteFields(body: Request["body"]): {
+  ephemeralKey: readonly [bigint, bigint];
+  viewTag: `0x${string}`;
+} {
+  const rawKey = body.ephemeralKey;
+  if (!Array.isArray(rawKey) || rawKey.length !== 2) {
+    throw ValidationError.invalidInput({
+      message: "ephemeralKey must be a [x, y] pair to quote a fee commitment.",
+    });
+  }
+  if (body.viewTag === undefined || body.viewTag === null) {
+    throw ValidationError.invalidInput({
+      message: "viewTag is required to quote a fee commitment.",
+    });
+  }
+  try {
+    const ephemeralKey: [bigint, bigint] = [
+      BigInt(rawKey[0]),
+      BigInt(rawKey[1]),
+    ];
+    // Normalise viewTag to a single-byte hex string (accepts number or hex).
+    const viewTag = toHex(BigInt(body.viewTag) & 0xffn, { size: 1 });
+    return { ephemeralKey, viewTag };
+  } catch {
+    throw ValidationError.invalidInput({
+      message: "ephemeralKey/viewTag are malformed.",
+    });
+  }
 }

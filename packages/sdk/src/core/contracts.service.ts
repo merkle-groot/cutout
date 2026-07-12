@@ -11,7 +11,11 @@ import {
   getAddress,
   http,
 } from "viem";
-import { Withdrawal, WithdrawalProof } from "../types/withdrawal.js";
+import {
+  RelayWithdrawal,
+  Withdrawal,
+  WithdrawalProof,
+} from "../types/withdrawal.js";
 import {
   AssetConfig,
   ContractInteractions,
@@ -19,6 +23,7 @@ import {
 } from "../interfaces/contracts.interface.js";
 import { IEntrypointABI } from "../abi/IEntrypoint.js";
 import { IPrivacyPoolABI } from "../abi/IPrivacyPool.js";
+import { IL2PrivacyPoolABI } from "../abi/IL2PrivacyPool.js";
 import { ERC20ABI } from "../abi/ERC20.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { CommitmentProof, Hash } from "../types/commitment.js";
@@ -27,6 +32,13 @@ import { ContractError } from "../errors/base.error.js";
 
 /** Sentinel address used by the pools to represent the native asset. */
 const NATIVE_ASSET: Address = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+
+/**
+ * Explicit gas for `relay()`. The OP canonical messenger's `sendMessage` is
+ * under-estimated by `eth_estimateGas` (observed live), so the relay reverts if
+ * left to auto-estimation. Mirrors the e2e's `gas: 3_000_000n`.
+ */
+const RELAY_GAS_LIMIT = 3_000_000n;
 
 export class ContractInteractionsService implements ContractInteractions {
   private publicClient: PublicClient;
@@ -136,14 +148,16 @@ export class ContractInteractionsService implements ContractInteractions {
   }
 
   /**
-   * Withdraws funds from the privacy pool.
+   * @deprecated Use {@link relay}. The merged pool exposes a single L1
+   * withdrawal entry point (`relay`); this is a thin alias kept for callers that
+   * still say `withdraw`.
    *
-   * @param withdrawal - The withdrawal object containing recipient details and amount.
-   * @param withdrawalProof - The cryptographic proof verifying the withdrawal.
+   * @param withdrawal - The relay withdrawal (`{chainId, data}`).
+   * @param withdrawalProof - The `withdrawL1` proof.
    * @returns Transaction response containing the transaction hash.
    */
   async withdraw(
-    withdrawal: Withdrawal,
+    withdrawal: RelayWithdrawal,
     withdrawalProof: WithdrawalProof,
     scope: Hash,
   ): Promise<TransactionResponse> {
@@ -175,15 +189,17 @@ export class ContractInteractionsService implements ContractInteractions {
   }
 
   /**
-   * Relays a withdrawal transaction to the entrypoint contract.
-   * This function is used to facilitate relayer transactions.
+   * Relays a Mode-3 withdrawal directly to the L1 pool: burns the spent note and
+   * emits the bridge + note-delivery ops toward `withdrawal.chainId`.
    *
-   * @param withdrawal - The withdrawal data structure.
-   * @param withdrawalProof - The cryptographic proof required for withdrawal.
+   * @param withdrawal - The relay withdrawal (`{chainId, data}`), where
+   *   `chainId` is the destination and `data` is the encoded `RelayData`.
+   * @param withdrawalProof - The `withdrawL1` proof (9 public signals).
+   * @param scope - Pool scope, used to resolve the pool address.
    * @returns Transaction response containing hash and wait function.
    */
   async relay(
-    withdrawal: Withdrawal,
+    withdrawal: RelayWithdrawal,
     withdrawalProof: WithdrawalProof,
     scope: Hash,
   ): Promise<TransactionResponse> {
@@ -199,6 +215,8 @@ export class ContractInteractionsService implements ContractInteractions {
         functionName: "relay",
         account: this.account,
         args: [withdrawal, formattedProof],
+        // OP messenger sendMessage under-estimates via eth_estimateGas.
+        gas: RELAY_GAS_LIMIT,
       });
 
       return await this.executeTransaction(request);
@@ -209,6 +227,113 @@ export class ContractInteractionsService implements ContractInteractions {
       });
       throw error;
     }
+  }
+
+  /**
+   * Activates a bridged Mode-3 note on the destination (L2) pool: promotes a
+   * *pending* note to *spendable* once matching bridged tokens have landed
+   * (CLAUDE.md §6). Must be constructed against the L2 chain/RPC.
+   *
+   * @param l2PoolAddress - The destination L2 shielded pool.
+   * @param commitmentHash - `C_dest` of the delivered note.
+   */
+  async activateNote(
+    l2PoolAddress: Address,
+    commitmentHash: bigint,
+  ): Promise<TransactionResponse> {
+    try {
+      const { request } = await this.publicClient.simulateContract({
+        address: l2PoolAddress,
+        abi: IL2PrivacyPoolABI as Abi,
+        functionName: "activateNote",
+        account: this.account,
+        args: [commitmentHash],
+      });
+      return await this.executeTransaction(request);
+    } catch (error) {
+      throw new Error(
+        `Failed to activate note: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    }
+  }
+
+  /**
+   * Spends an activated note on the destination (L2) pool with a `withdrawL2`
+   * proof (5 public signals; `pubSignals[0]=nullifier, [1]=noteValue`). Must be
+   * constructed against the L2 chain/RPC.
+   *
+   * @param l2PoolAddress - The destination L2 shielded pool.
+   * @param withdrawal - The L2 `Withdrawal{processooor,data}`.
+   * @param withdrawalProof - The `withdrawL2` Groth16 proof.
+   */
+  async withdrawL2(
+    l2PoolAddress: Address,
+    withdrawal: Withdrawal,
+    withdrawalProof: WithdrawalProof,
+  ): Promise<TransactionResponse> {
+    try {
+      const formattedProof = this.formatProof(withdrawalProof);
+      const { request } = await this.publicClient.simulateContract({
+        address: l2PoolAddress,
+        abi: IL2PrivacyPoolABI as Abi,
+        functionName: "withdraw",
+        account: this.account,
+        args: [withdrawal, formattedProof],
+      });
+      return await this.executeTransaction(request);
+    } catch (error) {
+      throw new Error(
+        `Failed to withdraw on L2: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    }
+  }
+
+  /** Reads the current L2 state-tree root. */
+  async getL2Root(l2PoolAddress: Address): Promise<bigint> {
+    return (await this.publicClient.readContract({
+      address: l2PoolAddress,
+      abi: IL2PrivacyPoolABI as Abi,
+      functionName: "currentRoot",
+    })) as bigint;
+  }
+
+  /** Whether the bridged note `C_dest` has been received on L2 (pending or activated). */
+  async isNoteReceived(
+    l2PoolAddress: Address,
+    commitmentHash: bigint,
+  ): Promise<boolean> {
+    return (await this.publicClient.readContract({
+      address: l2PoolAddress,
+      abi: IL2PrivacyPoolABI as Abi,
+      functionName: "receivedCommitments",
+      args: [commitmentHash],
+    })) as boolean;
+  }
+
+  /** The still-pending (not-yet-activated) value for `C_dest`, or 0 once activated. */
+  async getPendingValue(
+    l2PoolAddress: Address,
+    commitmentHash: bigint,
+  ): Promise<bigint> {
+    return (await this.publicClient.readContract({
+      address: l2PoolAddress,
+      abi: IL2PrivacyPoolABI as Abi,
+      functionName: "pendingValue",
+      args: [commitmentHash],
+    })) as bigint;
+  }
+
+  /** Whether an L2 nullifier has been spent. */
+  async isL2NullifierSpent(
+    l2PoolAddress: Address,
+    nullifierHash: bigint,
+  ): Promise<boolean> {
+    return (await this.publicClient.readContract({
+      address: l2PoolAddress,
+      abi: IL2PrivacyPoolABI as Abi,
+      functionName: "nullifierHashes",
+      args: [nullifierHash],
+    })) as boolean;
   }
 
   /**

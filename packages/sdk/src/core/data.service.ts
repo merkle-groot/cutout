@@ -1,8 +1,11 @@
 import {createPublicClient, type Hex, http, parseAbiItem, type PublicClient,} from "viem";
 import {mapLimit} from "async";
-import {ChainConfig, DepositEvent, RagequitEvent, WithdrawalEvent,} from "../types/events.js";
+import {LeanIMT} from "@zk-kit/lean-imt";
+import {poseidon} from "maci-crypto/build/ts/hashing.js";
+import {ChainConfig, DepositEvent, L2NoteActivatedEvent, L2NoteEvent, L2NoteReceivedEvent, RagequitEvent, WithdrawalEvent,} from "../types/events.js";
 import {PoolInfo} from "../types/account.js";
 import {Hash} from "../types/commitment.js";
+import {ScannableNote} from "../types/stealth.js";
 import {BlockRange, ChainLogFetchConfig, DEFAULT_LOG_FETCH_CONFIG, LogFetchConfig,} from "../types/rateLimit.js";
 import {Logger, LogLevel} from "../utils/logger.js";
 import {DataError} from "../errors/data.error.js";
@@ -12,6 +15,14 @@ import {ErrorCode} from "../errors/base.error.js";
 const DEPOSIT_EVENT = parseAbiItem('event Deposited(address indexed _depositor, uint256 _commitment, uint256 _label, uint256 _value, uint256 _merkleRoot)');
 const WITHDRAWAL_EVENT = parseAbiItem('event Withdrawn(address indexed _processooor, uint256 _value, uint256 _spentNullifier, uint256 _newCommitment)');
 const RAGEQUIT_EVENT = parseAbiItem('event Ragequit(address indexed _ragequitter, uint256 _commitment, uint256 _label, uint256 _value)');
+
+// Mode-3 (Cutout) note-delivery events.
+// L1: carries the ephemeral key + view tag a recipient scans for.
+const L2NOTE_EVENT = parseAbiItem('event L2Note(uint256 indexed _newCommitmentHashL2, uint256[2] _ephemeralKey, bytes1 indexed _viewTag)');
+// L2: bridged tokens + note landed (pending until activated).
+const L2_NOTE_RECEIVED_EVENT = parseAbiItem('event NoteReceived(uint256 indexed _commitment, uint256 _value)');
+// L2: note became spendable and was inserted into the state tree (insertion order = leaves).
+const L2_NOTE_ACTIVATED_EVENT = parseAbiItem('event NoteActivated(uint256 indexed _commitment, uint256 _value)');
 
 /**
  * Service responsible for fetching and managing privacy pool events across multiple chains.
@@ -392,6 +403,219 @@ export class DataService {
       throw DataError.networkError(
         pool.chainId,
         error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  }
+
+  /**
+   * Get L1 `L2Note` events — the note-delivery half of Mode-3 relays. Each
+   * carries `C_dest`, the ephemeral key `E`, and the view tag a recipient
+   * scans for (value is NOT here; see {@link getL2NotesReceived}).
+   *
+   * @param pool - The L1 pool.
+   * @param fromBlock - Optional starting block.
+   */
+  async getL2Notes(
+    pool: PoolInfo,
+    fromBlock: bigint = pool.deploymentBlock,
+  ): Promise<L2NoteEvent[]> {
+    const logs = await this.fetchAllLogs(pool, L2NOTE_EVENT, fromBlock, "l2note");
+    return logs.map((log) => {
+      const typedLog = log as {
+        args?: {
+          _newCommitmentHashL2?: bigint;
+          _ephemeralKey?: readonly [bigint, bigint];
+          _viewTag?: Hex;
+        };
+        blockNumber?: bigint;
+        transactionHash?: Hex;
+      };
+      const args = typedLog.args;
+      if (
+        !args?._newCommitmentHashL2 ||
+        !args._ephemeralKey ||
+        args._viewTag === undefined ||
+        !typedLog.blockNumber ||
+        !typedLog.transactionHash
+      ) {
+        throw DataError.invalidLog("l2note", "missing required fields");
+      }
+      return {
+        commitment: args._newCommitmentHashL2 as Hash,
+        ephemeralKey: [args._ephemeralKey[0], args._ephemeralKey[1]] as const,
+        viewTag: args._viewTag,
+        blockNumber: BigInt(typedLog.blockNumber),
+        transactionHash: typedLog.transactionHash,
+      };
+    });
+  }
+
+  /**
+   * Get L2 `NoteReceived` events — bridged tokens + note have landed (pending
+   * until activated). Supplies the cleartext `value` the scanner needs.
+   */
+  async getL2NotesReceived(
+    pool: PoolInfo,
+    fromBlock: bigint = pool.deploymentBlock,
+  ): Promise<L2NoteReceivedEvent[]> {
+    const logs = await this.fetchAllLogs(
+      pool,
+      L2_NOTE_RECEIVED_EVENT,
+      fromBlock,
+      "noteReceived",
+    );
+    return logs.map((log) =>
+      this.parseCommitmentValueLog(log, "noteReceived"),
+    );
+  }
+
+  /**
+   * Get L2 `NoteActivated` events — the note became spendable and was inserted
+   * into the L2 state tree. Insertion order defines the Merkle leaves; see
+   * {@link reconstructL2StateTree}.
+   */
+  async getL2NotesActivated(
+    pool: PoolInfo,
+    fromBlock: bigint = pool.deploymentBlock,
+  ): Promise<L2NoteActivatedEvent[]> {
+    const logs = await this.fetchAllLogs(
+      pool,
+      L2_NOTE_ACTIVATED_EVENT,
+      fromBlock,
+      "noteActivated",
+    );
+    return logs.map((log) =>
+      this.parseCommitmentValueLog(log, "noteActivated"),
+    );
+  }
+
+  /**
+   * Join L1 `L2Note` deliveries with L2 `NoteReceived` values into the
+   * {@link ScannableNote} candidates a recipient feeds to `NoteService.scanL2Notes`.
+   * A delivery with no matching received value yet (bridge still in flight) is
+   * omitted — it can't be spent until the tokens land anyway.
+   *
+   * @param l2Notes - From {@link getL2Notes} (L1).
+   * @param received - From {@link getL2NotesReceived} (L2).
+   */
+  buildScannableNotes(
+    l2Notes: readonly L2NoteEvent[],
+    received: readonly L2NoteReceivedEvent[],
+  ): ScannableNote[] {
+    const valueByCommitment = new Map<bigint, bigint>();
+    for (const r of received) {
+      valueByCommitment.set(r.commitment as bigint, r.value);
+    }
+    const candidates: ScannableNote[] = [];
+    for (const note of l2Notes) {
+      const value = valueByCommitment.get(note.commitment as bigint);
+      if (value === undefined) continue;
+      candidates.push({
+        commitment: note.commitment,
+        ephemeralKey: note.ephemeralKey,
+        viewTag: note.viewTag,
+        value,
+      });
+    }
+    return candidates;
+  }
+
+  /**
+   * Reconstruct the L2 state tree from insertion-ordered `NoteActivated`
+   * events, matching the on-chain LeanIMT (Poseidon-2 hasher). Returns the tree
+   * so callers can `generateProof(tree.indexOf(cDest))` for a `withdrawL2` proof.
+   *
+   * Events MUST be passed in chain order (block then log index). Verify
+   * `tree.root` against the pool's on-chain `currentRoot()` before proving.
+   */
+  reconstructL2StateTree(
+    activated: readonly L2NoteActivatedEvent[],
+  ): LeanIMT<bigint> {
+    const tree = new LeanIMT<bigint>((a, b) => poseidon([a, b]));
+    for (const ev of activated) {
+      tree.insert(ev.commitment as bigint);
+    }
+    return tree;
+  }
+
+  /** Parse a `(uint256 indexed _commitment, uint256 _value)` L2 event log. */
+  private parseCommitmentValueLog(
+    log: unknown,
+    kind: string,
+  ): L2NoteReceivedEvent {
+    const typedLog = log as {
+      args?: { _commitment?: bigint; _value?: bigint };
+      blockNumber?: bigint;
+      transactionHash?: Hex;
+    };
+    const args = typedLog.args;
+    if (
+      !args?._commitment ||
+      args._value === undefined ||
+      !typedLog.blockNumber ||
+      !typedLog.transactionHash
+    ) {
+      throw DataError.invalidLog(kind, "missing required fields");
+    }
+    return {
+      commitment: args._commitment as Hash,
+      value: args._value,
+      blockNumber: BigInt(typedLog.blockNumber),
+      transactionHash: typedLog.transactionHash,
+    };
+  }
+
+  /**
+   * Chunked, rate-limited, retrying fetch of all logs for one event over the
+   * pool's history. Shared by the Mode-3 event getters.
+   */
+  private async fetchAllLogs(
+    pool: PoolInfo,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    event: any,
+    fromBlock: bigint | undefined,
+    label: string,
+  ): Promise<unknown[]> {
+    try {
+      const client = this.getClientForChain(pool.chainId);
+      const chainConfig = this.getConfigForChain(pool.chainId);
+      const logConfig = this.getLogFetchConfigForChain(pool.chainId);
+
+      const startBlock = fromBlock ?? chainConfig.startBlock;
+      const toBlock = await this.getCurrentBlock(pool.chainId);
+      const ranges = this.generateBlockRanges(
+        startBlock,
+        toBlock,
+        logConfig.blockChunkSize,
+      );
+
+      this.logger.debug(
+        `Fetching ${label} in ${ranges.length} chunks for pool ${pool.address}`,
+      );
+
+      const allLogs = await mapLimit<BlockRange, unknown[]>(
+        ranges,
+        logConfig.concurrency,
+        async (range: BlockRange) => {
+          if (logConfig.chunkDelayMs > 0) {
+            await this.sleep(logConfig.chunkDelayMs);
+          }
+          return this.fetchLogsWithRetry(
+            client,
+            pool.address,
+            event,
+            range,
+            logConfig,
+          );
+        },
+      );
+
+      return allLogs.flat();
+    } catch (error) {
+      if (error instanceof DataError) throw error;
+      throw DataError.networkError(
+        pool.chainId,
+        error instanceof Error ? error : new Error(String(error)),
       );
     }
   }

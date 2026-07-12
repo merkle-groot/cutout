@@ -3,7 +3,10 @@
  */
 export enum CircuitName {
   Commitment = "commitment",
-  Withdraw = "withdraw",
+  /** Mode-3 L1 spend: burns the L1 note, emits the bridged C_dest note. */
+  WithdrawL1 = "withdrawL1",
+  /** Mode-3 L2 spend: opens a stealth note in the destination shielded pool. */
+  WithdrawL2 = "withdrawL2",
 }
 
 /**

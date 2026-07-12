@@ -1,12 +1,42 @@
 #!/bin/bash
+set -euo pipefail
 
-CIRCUITS=("commitment" "withdraw")
+# Copies circuit artifacts consumed by the SDK at runtime (wasm + proving/verification keys)
+# into the packaged artifact dir. Asset names must match `circuitToAsset` in
+# src/circuits/circuits.interface.ts.
+
+CIRCUITS_DIR="../circuits"
 DEST_DIR="./dist/node/artifacts"
-
 mkdir -p "$DEST_DIR"
-for circuit in "${CIRCUITS[@]}"
+
+# --- Mode-3 withdrawal circuits (withdrawL1, withdrawL2) ---
+# TODO(trusted-setup): these copy the *development* Groth16 keys produced by
+# `yarn setup:all` in packages/circuits. A real trusted-setup ceremony MUST
+# replace build/withdrawL{1,2}/groth16_{pkey.zkey,vkey.json} with final keys
+# (mirroring trusted-setup/final-keys/) before any mainnet release.
+for circuit in withdrawL1 withdrawL2
 do
-  cp "../circuits/trusted-setup/final-keys/$circuit.zkey" "$DEST_DIR/${circuit}.zkey"
-  cp "../circuits/trusted-setup/final-keys/$circuit.vkey" "$DEST_DIR/${circuit}.vkey"
-  cp "../circuits/build/$circuit/${circuit}_js/${circuit}.wasm" "$DEST_DIR/"
+  cp "$CIRCUITS_DIR/build/${circuit}/${circuit}_js/${circuit}.wasm" "$DEST_DIR/${circuit}.wasm"
+  cp "$CIRCUITS_DIR/build/${circuit}/groth16_pkey.zkey"            "$DEST_DIR/${circuit}.zkey"
+  cp "$CIRCUITS_DIR/build/${circuit}/groth16_vkey.json"           "$DEST_DIR/${circuit}.vkey"
 done
+
+# --- Commitment circuit (ragequit path) ---
+# NOTE: the commitment circuit is mid-rename in packages/circuits (commitment ->
+# commitmentL1) and currently has no regenerated proving/verification keys or a
+# compiled `main`. We keep copying the legacy final-keys so proveCommitment keeps
+# a target; resolving the ragequit circuit is tracked separately.
+if [ -f "$CIRCUITS_DIR/trusted-setup/final-keys/commitment.zkey" ]; then
+  cp "$CIRCUITS_DIR/trusted-setup/final-keys/commitment.zkey" "$DEST_DIR/commitment.zkey"
+  cp "$CIRCUITS_DIR/trusted-setup/final-keys/commitment.vkey" "$DEST_DIR/commitment.vkey"
+fi
+if [ -f "$CIRCUITS_DIR/build/commitment/commitment_js/commitment.wasm" ]; then
+  cp "$CIRCUITS_DIR/build/commitment/commitment_js/commitment.wasm" "$DEST_DIR/commitment.wasm"
+elif [ -f "$CIRCUITS_DIR/build/commitmentL1/commitmentL1_js/commitmentL1.wasm" ]; then
+  # Fallback: the renamed hasher (same value/label/nullifier/secret preimage).
+  cp "$CIRCUITS_DIR/build/commitmentL1/commitmentL1_js/commitmentL1.wasm" "$DEST_DIR/commitment.wasm"
+else
+  echo "WARN: no commitment wasm found (circuit rename in progress); commitment.wasm not copied" >&2
+fi
+
+echo "Copied circuit artifacts to $DEST_DIR"

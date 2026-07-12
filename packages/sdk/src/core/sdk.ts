@@ -2,7 +2,12 @@ import { CommitmentService } from "./commitment.service.js";
 import { WithdrawalService } from "./withdrawal.service.js";
 import { CircuitsInterface } from "../interfaces/circuits.interface.js";
 import { Commitment, CommitmentProof } from "../types/commitment.js";
-import { WithdrawalProof, WithdrawalProofInput } from "../types/withdrawal.js";
+import {
+  WithdrawalProof,
+  WithdrawalProofInput,
+  WithdrawL1ProofInput,
+  WithdrawL2ProofInput,
+} from "../types/withdrawal.js";
 import { ContractInteractionsService } from "./contracts.service.js";
 import { Hex, Address, Chain } from "viem";
 import { AccountCommitment } from "../types/account.js";
@@ -66,23 +71,57 @@ export class PrivacyPoolSDK {
   }
 
   /**
-   * Generates a withdrawal proof.
+   * Generates a Mode-3 `withdrawL1` (relay) proof: burns the spent L1 note and
+   * emits the bridged destination commitment `C_dest`.
    *
-   * @param commitment - Commitment to withdraw
-   * @param input - Input parameters for the withdrawal
-   * @param withdrawal - Withdrawal details
+   * @param commitment - The L1 note being spent.
+   * @param input - `withdrawL1` proof inputs.
+   */
+  public async proveWithdrawalL1(
+    commitment: Commitment | AccountCommitment,
+    input: WithdrawL1ProofInput,
+  ): Promise<WithdrawalProof> {
+    return await this.withdrawalService.proveWithdrawalL1(commitment, input);
+  }
+
+  /**
+   * Generates a Mode-3 `withdrawL2` (spend) proof: spends the delivered stealth
+   * note in the destination shielded pool.
+   *
+   * @param input - `withdrawL2` proof inputs.
+   */
+  public async proveWithdrawalL2(
+    input: WithdrawL2ProofInput,
+  ): Promise<WithdrawalProof> {
+    return await this.withdrawalService.proveWithdrawalL2(input);
+  }
+
+  /** Verifies a `withdrawL1` proof. */
+  public async verifyWithdrawalL1(
+    withdrawalProof: WithdrawalProof,
+  ): Promise<boolean> {
+    return this.withdrawalService.verifyWithdrawalL1(withdrawalProof);
+  }
+
+  /** Verifies a `withdrawL2` proof. */
+  public async verifyWithdrawalL2(
+    withdrawalProof: WithdrawalProof,
+  ): Promise<boolean> {
+    return this.withdrawalService.verifyWithdrawalL2(withdrawalProof);
+  }
+
+  /**
+   * @deprecated Use {@link proveWithdrawalL1}. Retained until consumers migrate.
    */
   public async proveWithdrawal(
-    commitment: Commitment | AccountCommitment ,
+    commitment: Commitment | AccountCommitment,
     input: WithdrawalProofInput,
   ): Promise<WithdrawalProof> {
     return await this.withdrawalService.proveWithdrawal(commitment, input);
   }
 
   /**
-   * Verifies a withdrawal proof.
-   *
-   * @param withdrawalProof - The withdrawal payload to verify
+   * @deprecated Use {@link verifyWithdrawalL1} / {@link verifyWithdrawalL2}.
    */
   public async verifyWithdrawal(
     withdrawalProof: WithdrawalProof,

@@ -38,6 +38,47 @@ export interface RagequitEvent {
 }
 
 /**
+ * The L1 `L2Note(_newCommitmentHashL2, _ephemeralKey, _viewTag)` event — the
+ * note-delivery half of a Mode-3 relay. Carries the ephemeral key + view tag a
+ * recipient scans for. Value is NOT here; it arrives via the bridge and is
+ * observed on L2 as {@link L2NoteReceivedEvent} (or from the L1 `Withdrawn`
+ * event's `_value`).
+ */
+export interface L2NoteEvent {
+  /** `C_dest` — the bridged destination commitment. */
+  commitment: Hash;
+  /** `E = e·G` — the ephemeral public key, `[x, y]`. */
+  ephemeralKey: readonly [bigint, bigint];
+  /** Low byte of `Poseidon(ss)`, as a hex `bytes1`. */
+  viewTag: Hex;
+  blockNumber: bigint;
+  transactionHash: Hex;
+}
+
+/**
+ * The L2 `NoteReceived(_commitment, _value)` event — bridged tokens + note
+ * message have landed; the note is *pending* until activated (CLAUDE.md §6).
+ */
+export interface L2NoteReceivedEvent {
+  commitment: Hash;
+  value: bigint;
+  blockNumber: bigint;
+  transactionHash: Hex;
+}
+
+/**
+ * The L2 `NoteActivated(_commitment, _value)` event — the note became
+ * *spendable* (matching bridged tokens confirmed) and was inserted into the L2
+ * state tree. Insertion order defines the L2 Merkle leaves.
+ */
+export interface L2NoteActivatedEvent {
+  commitment: Hash;
+  value: bigint;
+  blockNumber: bigint;
+  transactionHash: Hex;
+}
+
+/**
  * Configuration for a chain's data provider
  */
 export interface ChainConfig {

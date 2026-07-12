@@ -141,11 +141,13 @@ describe("PrivacyPoolSDK", () => {
       };
 
       const withdrawalInput = {
-        withdrawalAmount: BigInt(500),
+        withdrawnValue: BigInt(500),
         stateMerkleProof,
         aspMerkleProof,
         stateRoot: BigInt(5) as Hash,
         aspRoot: BigInt(8) as Hash,
+        spendingPublicKey: [BigInt(20), BigInt(21)] as [bigint, bigint],
+        sharedSecretX: BigInt(22),
         newNullifier: BigInt(12) as Secret,
         newSecret: BigInt(13) as Secret,
         context: BigInt(1),
@@ -157,7 +159,7 @@ describe("PrivacyPoolSDK", () => {
         .spyOn(circuits, "downloadArtifacts")
         .mockResolvedValue(binariesMock);
 
-      const result = await sdk.proveWithdrawal(mockCommitment, withdrawalInput);
+      const result = await sdk.proveWithdrawalL1(mockCommitment, withdrawalInput);
 
       expect(result).toHaveProperty("proof", "mockProof");
       expect(result).toHaveProperty("publicSignals", "mockPublicSignals");
@@ -195,11 +197,13 @@ describe("PrivacyPoolSDK", () => {
       };
 
       const withdrawalInput = {
-        withdrawalAmount: BigInt(500),
+        withdrawnValue: BigInt(500),
         stateMerkleProof,
         aspMerkleProof,
         stateRoot: BigInt(5) as Hash,
         aspRoot: BigInt(8) as Hash,
+        spendingPublicKey: [BigInt(20), BigInt(21)] as [bigint, bigint],
+        sharedSecretX: BigInt(22),
         newNullifier: BigInt(12) as Secret,
         newSecret: BigInt(13) as Secret,
         context: BigInt(1),
@@ -211,7 +215,7 @@ describe("PrivacyPoolSDK", () => {
         .spyOn(circuits, "downloadArtifacts")
         .mockResolvedValue(binariesMock);
 
-      const result = await sdk.proveWithdrawal(
+      const result = await sdk.proveWithdrawalL1(
         mockAccountCommitment,
         withdrawalInput
       );
@@ -241,11 +245,13 @@ describe("PrivacyPoolSDK", () => {
       };
 
       const withdrawalInput = {
-        withdrawalAmount: BigInt(500),
+        withdrawnValue: BigInt(500),
         stateMerkleProof: mockStateMerkleProof,
         aspMerkleProof: mockAspMerkleProof,
         stateRoot: BigInt(7) as Hash,
         aspRoot: BigInt(10) as Hash,
+        spendingPublicKey: [BigInt(20), BigInt(21)] as [bigint, bigint],
+        sharedSecretX: BigInt(22),
         newNullifier: BigInt(14) as Secret,
         newSecret: BigInt(15) as Secret,
         context: BigInt(1),
@@ -254,7 +260,7 @@ describe("PrivacyPoolSDK", () => {
       };
 
       await expect(
-        sdk.proveWithdrawal(mockCommitment, withdrawalInput)
+        sdk.proveWithdrawalL1(mockCommitment, withdrawalInput)
       ).rejects.toThrow(ProofError);
     });
 
@@ -267,24 +273,65 @@ describe("PrivacyPoolSDK", () => {
         .mockRejectedValue(new Error("Verification error"));
 
       await expect(
-        sdk.verifyWithdrawal({
+        sdk.verifyWithdrawalL1({
           proof: {} as snarkjs.Groth16Proof,
           publicSignals: [],
         })
       ).rejects.toThrow(ProofError);
     });
 
-    it("should return true for valid withdrawal proof", async () => {
+    it("should return true for valid withdrawL1 proof", async () => {
       circuits.getVerificationKey = vi
         .fn()
         .mockResolvedValue(new TextEncoder().encode("{}"));
       snarkjs.groth16.verify = vi.fn().mockResolvedValue(true);
 
-      const isValid = await sdk.verifyWithdrawal({
+      const isValid = await sdk.verifyWithdrawalL1({
         proof: {} as snarkjs.Groth16Proof,
         publicSignals: [],
       });
       expect(isValid).toBe(true);
+    });
+
+    it("proves and verifies a withdrawL2 (spend) proof", async () => {
+      snarkjs.groth16.fullProve = vi.fn().mockResolvedValue({
+        proof: "mockL2Proof",
+        publicSignals: "mockL2Signals",
+      });
+
+      const stateMerkleProof: LeanIMTMerkleProof<bigint> = {
+        root: BigInt(5),
+        leaf: BigInt(99),
+        index: 3,
+        siblings: [BigInt(6), BigInt(7)],
+      };
+
+      const l2Input = {
+        noteValue: BigInt(500),
+        stateMerkleProof,
+        stateRoot: BigInt(5) as Hash,
+        stateTreeDepth: BigInt(32),
+        stealthPrivateKey: BigInt(77) as Secret,
+        sharedSecretX: BigInt(88),
+        context: BigInt(1),
+      };
+
+      vi.spyOn(circuits, "downloadArtifacts").mockResolvedValue(binariesMock);
+      const wasmSpy = vi.spyOn(circuits, "getWasm");
+      const zkeySpy = vi.spyOn(circuits, "getProvingKey");
+
+      const result = await sdk.proveWithdrawalL2(l2Input);
+      expect(result).toHaveProperty("proof", "mockL2Proof");
+      expect(result).toHaveProperty("publicSignals", "mockL2Signals");
+      // must resolve the L2 circuit artifacts, not L1
+      expect(wasmSpy).toHaveBeenCalledWith("withdrawL2");
+      expect(zkeySpy).toHaveBeenCalledWith("withdrawL2");
+
+      circuits.getVerificationKey = vi
+        .fn()
+        .mockResolvedValue(new TextEncoder().encode("{}"));
+      snarkjs.groth16.verify = vi.fn().mockResolvedValue(true);
+      expect(await sdk.verifyWithdrawalL2(result)).toBe(true);
     });
   });
 });

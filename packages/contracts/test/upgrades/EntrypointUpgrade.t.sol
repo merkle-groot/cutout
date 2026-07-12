@@ -10,7 +10,7 @@ import {Initializable} from '@oz/proxy/utils/Initializable.sol';
 import {Constants} from 'contracts/lib/Constants.sol';
 
 import {Entrypoint, IEntrypoint} from 'contracts/Entrypoint.sol';
-import {PrivacyPoolComplex} from 'contracts/implementations/PrivacyPoolComplex.sol';
+import {PrivacyPool} from 'contracts/PrivacyPool.sol';
 import {ProofLib} from 'contracts/lib/ProofLib.sol';
 import {IPrivacyPool} from 'interfaces/IPrivacyPool.sol';
 
@@ -211,8 +211,8 @@ contract EntrypointUpgradeIntegration is Test, IntegrationUtils, MainnetEnvironm
   function test_RegisterNewPool() public {
     address _raiToken = 0x03ab458634910AaD20eF5f1C8ee96F1D6ac54919;
 
-    // Deploy new RAI pool
-    PrivacyPoolComplex _raiPool = new PrivacyPoolComplex(
+    // Deploy new RAI pool (unified pool; ERC20 selected via the `_asset` arg)
+    PrivacyPool _raiPool = new PrivacyPool(
       address(proxy), address(ethPool.WITHDRAWAL_VERIFIER()), address(ethPool.RAGEQUIT_VERIFIER()), _raiToken
     );
     uint256 _poolScope = _raiPool.SCOPE();

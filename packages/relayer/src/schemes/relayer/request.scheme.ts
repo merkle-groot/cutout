@@ -18,8 +18,11 @@ export const zHex = z
   .regex(/^0x[0-9a-fA-F]+/)
   .transform(x => x as `0x${string}`);
 
+// Mode-3 relay withdrawal: `{chainId, data}`, where `chainId` is the DESTINATION
+// chain the note is bridged to (distinct from the top-level request `chainId`,
+// which is the source chain the relay is broadcast on).
 export const zWithdrawal = z.object({
-  processooor: zAddress,
+  chainId: zNonNegativeBigInt,
   data: zHex
 });
 
@@ -46,7 +49,7 @@ export const zFeeCommitment = z.object({
 
 export const zRelayRequest = z.object({
   withdrawal: zWithdrawal,
-  publicSignals: z.array(z.string()).length(8),
+  publicSignals: z.array(z.string()).length(9),
   proof: zProof,
   scope: zNonNegativeBigInt,
   chainId: z.string().or(z.number()).pipe(z.coerce.number().positive()),

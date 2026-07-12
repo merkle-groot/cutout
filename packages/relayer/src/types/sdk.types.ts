@@ -1,6 +1,6 @@
 import {
   Address,
-  Withdrawal,
+  RelayWithdrawal,
   WithdrawalProof,
 } from "@0xbow/privacy-pools-core-sdk";
 import { WithdrawalPayload } from "../interfaces/relayer/request.js";
@@ -11,7 +11,7 @@ export interface SdkProviderInterface {
     withdrawalPayload: WithdrawalPayload,
     chainId: number,
   ): Promise<{ hash: string }>;
-  calculateContext(withdrawal: Withdrawal, scope: bigint): string;
+  calculateContext(withdrawal: RelayWithdrawal, scope: bigint): string;
   scopeData(
     scope: bigint,
     chainId: number,

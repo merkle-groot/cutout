@@ -2,3 +2,4 @@ export * from "./commitment.js";
 export * from "./withdrawal.js";
 export * from "./keys.js";
 export * from "./rateLimit.js";
+export * from "./stealth.js";

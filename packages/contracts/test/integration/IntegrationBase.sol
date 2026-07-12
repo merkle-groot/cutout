@@ -2,12 +2,9 @@
 pragma solidity 0.8.28;
 
 import {Entrypoint, IEntrypoint} from 'contracts/Entrypoint.sol';
-import {IPrivacyPool} from 'contracts/PrivacyPool.sol';
+import {IPrivacyPool, PrivacyPool} from 'contracts/PrivacyPool.sol';
 
 import {DeployLib} from 'contracts/lib/DeployLib.sol';
-
-import {PrivacyPoolComplex} from 'contracts/implementations/PrivacyPoolComplex.sol';
-import {PrivacyPoolSimple} from 'contracts/implementations/PrivacyPoolSimple.sol';
 
 import {CommitmentVerifier} from 'contracts/verifiers/CommitmentVerifier.sol';
 import {WithdrawalVerifier} from 'contracts/verifiers/WithdrawalVerifier.sol';
@@ -39,8 +36,8 @@ contract IntegrationBase is IntegrationUtils {
 
   // Core protocol contracts
   Entrypoint internal _entrypoint;
-  PrivacyPoolSimple internal _ethPool;
-  PrivacyPoolComplex internal _daiPool;
+  PrivacyPool internal _ethPool;
+  PrivacyPool internal _daiPool;
 
   // Groth16 Verifiers
   CommitmentVerifier internal _commitmentVerifier;
@@ -112,23 +109,28 @@ contract IntegrationBase is IntegrationUtils {
     );
     _entrypoint = Entrypoint(payable(_entrypointAddr));
 
-    // Deploy ETH pool
-    _ethPool = PrivacyPoolSimple(
+    // Deploy ETH pool (unified pool; native asset via Constants.NATIVE_ASSET)
+    _ethPool = PrivacyPool(
       _CREATEX.deployCreate2(
-        DeployLib.salt(_OWNER, DeployLib.SIMPLE_POOL_SALT),
+        DeployLib.salt(_OWNER, DeployLib.NATIVE_POOL_SALT),
         abi.encodePacked(
-          type(PrivacyPoolSimple).creationCode,
-          abi.encode(address(_entrypoint), address(_withdrawalVerifier), address(_commitmentVerifier))
+          type(PrivacyPool).creationCode,
+          abi.encode(
+            address(_entrypoint),
+            address(_withdrawalVerifier),
+            address(_commitmentVerifier),
+            Constants.NATIVE_ASSET
+          )
         )
       )
     );
 
-    // Deploy DAI pool
-    _daiPool = PrivacyPoolComplex(
+    // Deploy DAI pool (unified pool; ERC20 via the _asset arg)
+    _daiPool = PrivacyPool(
       _CREATEX.deployCreate2(
-        DeployLib.salt(_OWNER, DeployLib.COMPLEX_POOL_SALT),
+        DeployLib.salt(_OWNER, DeployLib.TOKEN_POOL_SALT),
         abi.encodePacked(
-          type(PrivacyPoolComplex).creationCode,
+          type(PrivacyPool).creationCode,
           abi.encode(address(_entrypoint), address(_withdrawalVerifier), address(_commitmentVerifier), address(_DAI))
         )
       )

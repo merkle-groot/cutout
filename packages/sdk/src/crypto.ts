@@ -11,6 +11,9 @@ import {
   Hash,
   Secret,
   Withdrawal,
+  RelayWithdrawal,
+  RelayData,
+  L2RelayData,
   MasterKeys,
 } from "./types/index.js";
 import { encodeAbiParameters, Hex, keccak256, numberToHex } from "viem";
@@ -194,7 +197,68 @@ export function bigintToHex(num: bigint | string | undefined): Hex {
 }
 
 /**
- * Calculates the context hash for a withdrawal.
+ * ABI-encodes the L1 relay payload into the `data` field of a
+ * {@link RelayWithdrawal}. Carries the ephemeral key + view tag the recipient
+ * scans for. Mirrors the tuple layout in `e2e/relay.mjs`.
+ */
+export function encodeRelayData(data: RelayData): Hex {
+  return encodeAbiParameters(
+    [
+      {
+        name: "data",
+        type: "tuple",
+        components: [
+          { name: "recipient", type: "address" },
+          { name: "feeRecipient", type: "address" },
+          { name: "ephemeralKey", type: "uint256[2]" },
+          { name: "viewTag", type: "bytes1" },
+          { name: "relayFeeBPS", type: "uint256" },
+        ],
+      },
+    ],
+    [
+      {
+        recipient: data.recipient,
+        feeRecipient: data.feeRecipient,
+        ephemeralKey: [data.ephemeralKey[0], data.ephemeralKey[1]],
+        viewTag: data.viewTag,
+        relayFeeBPS: data.relayFeeBPS,
+      },
+    ],
+  );
+}
+
+/**
+ * ABI-encodes the L2 spend payload into the `data` field of a
+ * {@link Withdrawal}. No ephemeral key / view tag — those matter only at note
+ * delivery. Mirrors the tuple layout in `e2e/l2withdraw.mjs`.
+ */
+export function encodeL2RelayData(data: L2RelayData): Hex {
+  return encodeAbiParameters(
+    [
+      {
+        name: "data",
+        type: "tuple",
+        components: [
+          { name: "recipient", type: "address" },
+          { name: "feeRecipient", type: "address" },
+          { name: "relayFeeBPS", type: "uint256" },
+        ],
+      },
+    ],
+    [
+      {
+        recipient: data.recipient,
+        feeRecipient: data.feeRecipient,
+        relayFeeBPS: data.relayFeeBPS,
+      },
+    ],
+  );
+}
+
+/**
+ * Calculates the context hash for the L2 spend leg:
+ * `keccak256(abi.encode(Withdrawal{processooor,data}, scope)) % F`.
  */
 export function calculateContext(withdrawal: Withdrawal, scope: Hash): string {
   const hash =
@@ -215,6 +279,46 @@ export function calculateContext(withdrawal: Withdrawal, scope: Hash): string {
           [
             {
               processooor: withdrawal.processooor,
+              data: withdrawal.data,
+            },
+            scope,
+          ],
+        ),
+      ),
+    ) % SNARK_SCALAR_FIELD;
+  return numberToHex(hash);
+}
+
+/**
+ * Calculates the context hash for the L1 relay leg:
+ * `keccak256(abi.encode(RelayWithdrawal{chainId,data}, scope)) % F`.
+ *
+ * Distinct from {@link calculateContext} because the L1 relay shape has a
+ * `chainId` (uint256) where the L2 shape has a `processooor` (address); the
+ * two hash differently and must not be swapped. Mirrors `e2e/relay.mjs`.
+ */
+export function calculateRelayContext(
+  withdrawal: RelayWithdrawal,
+  scope: Hash,
+): string {
+  const hash =
+    BigInt(
+      keccak256(
+        encodeAbiParameters(
+          [
+            {
+              name: "withdrawal",
+              type: "tuple",
+              components: [
+                { name: "chainId", type: "uint256" },
+                { name: "data", type: "bytes" },
+              ],
+            },
+            { name: "scope", type: "uint256" },
+          ],
+          [
+            {
+              chainId: withdrawal.chainId,
               data: withdrawal.data,
             },
             scope,

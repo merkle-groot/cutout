@@ -2,6 +2,11 @@
 
 A TypeScript SDK for interacting with the Privacy Pool protocol. This SDK provides a comprehensive set of tools and utilities for integrating with Privacy Pool, enabling deposits, withdrawals, and other core functionality.
 
+> **📘 Mode-3 (Cutout) guide:** for cross-chain private withdrawals (L1 relay →
+> OP bridge → L2 activate/withdraw), stealth crypto, the two withdrawal proofs,
+> note scanning, and current caveats, see
+> [`docs/MODE3_SDK_GUIDE.md`](./docs/MODE3_SDK_GUIDE.md).
+
 ## Installation
 
 

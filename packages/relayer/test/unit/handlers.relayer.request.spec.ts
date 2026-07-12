@@ -53,8 +53,9 @@ import { privacyPoolRelayer } from "../../src/services/index.js";
 import { web3Provider } from "../../src/providers/index.js";
 
 const withdrawalPayload = {
+  // Mode-3 relay: withdrawal is {chainId (destination), data}; 9 public signals.
   withdrawal: {
-    processooor: "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789",
+    chainId: "11155420",
     data: "0xfeeMismatch",
   },
   proof: {
@@ -68,7 +69,7 @@ const withdrawalPayload = {
     protocol: "groth16",
     curve: "bn128",
   },
-  publicSignals: ["0", "0", "0", "0", "0", "0", "0", "0"],
+  publicSignals: ["0", "0", "0", "0", "0", "0", "0", "0", "0"],
   chainId: 31337,
   scope: "0",
 };

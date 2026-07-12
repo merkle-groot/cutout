@@ -1,5 +1,8 @@
 import { Address } from "viem";
-import { Withdrawal, WithdrawalProof } from "../types/withdrawal.js";
+import {
+  RelayWithdrawal,
+  WithdrawalProof,
+} from "../types/withdrawal.js";
 import { CommitmentProof, Hash } from "../types/commitment.js";
 
 export interface SolidityGroth16Proof {
@@ -34,13 +37,13 @@ export interface ContractInteractions {
   ): Promise<TransactionResponse>;
 
   withdraw(
-    withdrawal: Withdrawal,
+    withdrawal: RelayWithdrawal,
     withdrawalProof: WithdrawalProof,
     scope: Hash,
   ): Promise<TransactionResponse>;
 
   relay(
-    withdrawal: Withdrawal,
+    withdrawal: RelayWithdrawal,
     withdrawalProof: WithdrawalProof,
     scope: Hash,
   ): Promise<TransactionResponse>;

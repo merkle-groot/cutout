@@ -7,8 +7,8 @@ import {Test} from 'forge-std/Test.sol';
 import {ICreateX} from 'interfaces/external/ICreateX.sol';
 
 import {Entrypoint} from 'contracts/Entrypoint.sol';
-import {PrivacyPoolComplex} from 'contracts/implementations/PrivacyPoolComplex.sol';
-import {PrivacyPoolSimple} from 'contracts/implementations/PrivacyPoolSimple.sol';
+import {PrivacyPool} from 'contracts/PrivacyPool.sol';
+import {Constants} from 'contracts/lib/Constants.sol';
 import {CommitmentVerifier} from 'contracts/verifiers/CommitmentVerifier.sol';
 import {WithdrawalVerifier} from 'contracts/verifiers/WithdrawalVerifier.sol';
 
@@ -24,8 +24,8 @@ contract IntegrationDeploy is Test {
    * @param commitmentVerifier Address of the CommitmentVerifier contract
    * @param withdrawalVerifier Address of the WithdrawalVerifier contract
    * @param entrypoint Address of the Entrypoint contract
-   * @param nativePool Address of the PrivacyPoolSimple contract (for native assets)
-   * @param tokenPool Address of the PrivacyPoolComplex contract (for ERC20 tokens)
+   * @param nativePool Address of the native PrivacyPool
+   * @param tokenPool Address of the token PrivacyPool
    */
   struct Contracts {
     address commitmentVerifier;
@@ -180,11 +180,11 @@ contract IntegrationDeploy is Test {
   }
 
   /**
-   * @notice Deploy PrivacyPoolSimple contract for native assets
+   * @notice Deploy the unified PrivacyPool for the native asset
    * @param _entrypoint Address of the Entrypoint contract
    * @param _withdrawalVerifier Address of the WithdrawalVerifier contract
    * @param _commitmentVerifier Address of the CommitmentVerifier contract
-   * @return Address of the deployed PrivacyPoolSimple
+   * @return Address of the deployed native PrivacyPool
    */
   function _deployNativePool(
     address _entrypoint,
@@ -192,20 +192,21 @@ contract IntegrationDeploy is Test {
     address _commitmentVerifier
   ) private returns (address) {
     return _CREATEX.deployCreate2(
-      DeployLib.salt(_DEPLOYER, DeployLib.SIMPLE_POOL_SALT),
+      DeployLib.salt(_DEPLOYER, DeployLib.NATIVE_POOL_SALT),
       abi.encodePacked(
-        type(PrivacyPoolSimple).creationCode, abi.encode(_entrypoint, _withdrawalVerifier, _commitmentVerifier)
+        type(PrivacyPool).creationCode,
+        abi.encode(_entrypoint, _withdrawalVerifier, _commitmentVerifier, Constants.NATIVE_ASSET)
       )
     );
   }
 
   /**
-   * @notice Deploy PrivacyPoolComplex contract for ERC20 tokens
+   * @notice Deploy the unified PrivacyPool for an ERC20 token
    * @param _entrypoint Address of the Entrypoint contract
    * @param _withdrawalVerifier Address of the WithdrawalVerifier contract
    * @param _commitmentVerifier Address of the CommitmentVerifier contract
    * @param _token Address of the ERC20 token
-   * @return Address of the deployed PrivacyPoolComplex
+   * @return Address of the deployed token PrivacyPool
    */
   function _deployTokenPool(
     address _entrypoint,
@@ -214,9 +215,9 @@ contract IntegrationDeploy is Test {
     address _token
   ) private returns (address) {
     return _CREATEX.deployCreate2(
-      DeployLib.salt(_DEPLOYER, DeployLib.COMPLEX_POOL_SALT),
+      DeployLib.salt(_DEPLOYER, DeployLib.TOKEN_POOL_SALT),
       abi.encodePacked(
-        type(PrivacyPoolComplex).creationCode, abi.encode(_entrypoint, _withdrawalVerifier, _commitmentVerifier, _token)
+        type(PrivacyPool).creationCode, abi.encode(_entrypoint, _withdrawalVerifier, _commitmentVerifier, _token)
       )
     );
   }

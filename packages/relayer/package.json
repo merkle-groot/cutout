@@ -34,7 +34,7 @@
     "docker:run": "docker-compose up"
   },
   "dependencies": {
-    "@0xbow/privacy-pools-core-sdk": "0.1.17",
+    "@0xbow/privacy-pools-core-sdk": "1.2.0",
     "@ethersproject/bignumber": "5.8.0",
     "@ethersproject/bytes": "5.8.0",
     "@uniswap/sdk-core": "7.7.2",

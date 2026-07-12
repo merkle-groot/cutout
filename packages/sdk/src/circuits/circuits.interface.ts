@@ -26,9 +26,15 @@ export enum CircuitName {
    */
   MerkleTree = "merkleTree",
   /**
-   * Circuit for withdrawal operations.
+   * Mode-3 L1 withdrawal circuit: burns the spent L1 note and emits the
+   * bridged destination commitment (C_dest). 9 public signals.
    */
-  Withdraw = "withdraw",
+  WithdrawL1 = "withdrawL1",
+  /**
+   * Mode-3 L2 withdrawal circuit: spends a stealth note in the destination
+   * shielded pool. 5 public signals.
+   */
+  WithdrawL2 = "withdrawL2",
 }
 
 /**
@@ -92,10 +98,15 @@ export const circuitToAsset: Circ2Asset = {
     vkey: "merkleTree.vkey",
     zkey: "merkleTree.zkey",
   },
-  [CircuitName.Withdraw]: {
-    wasm: "withdraw.wasm",
-    vkey: "withdraw.vkey",
-    zkey: "withdraw.zkey",
+  [CircuitName.WithdrawL1]: {
+    wasm: "withdrawL1.wasm",
+    vkey: "withdrawL1.vkey",
+    zkey: "withdrawL1.zkey",
+  },
+  [CircuitName.WithdrawL2]: {
+    wasm: "withdrawL2.wasm",
+    vkey: "withdrawL2.vkey",
+    zkey: "withdrawL2.zkey",
   },
 } as const;
 
@@ -104,7 +115,8 @@ export const circuitToAsset: Circ2Asset = {
  */
 export interface Binaries {
   commitment: CircuitArtifacts;
-  withdraw: CircuitArtifacts;
+  withdrawL1: CircuitArtifacts;
+  withdrawL2: CircuitArtifacts;
   merkleTree?: CircuitArtifacts;
 }
 

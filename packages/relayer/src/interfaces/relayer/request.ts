@@ -1,5 +1,5 @@
 import {
-  Withdrawal as SdkWithdrawal,
+  RelayWithdrawal,
   WithdrawalProof,
 } from "@0xbow/privacy-pools-core-sdk";
 import { FeeCommitment } from "./common.js";
@@ -14,24 +14,29 @@ export interface ProofRelayerPayload {
 }
 
 /**
- * Represents the public signals for a withdrawal operation.
+ * Public signals for a Mode-3 `withdrawL1` (relay) proof. Circom emits circuit
+ * outputs first, so the two `newCommitmentHash*` outputs lead; indices match
+ * `WITHDRAW_L1_SIGNALS` in the SDK. 9 signals total (the L1 change note AND the
+ * bridged `C_dest`).
  */
 export interface WithdrawPublicSignals {
-  /** Hash of new commitment */
-  newCommitmentHash: bigint;
-  /** Hash of the existing commitment nullifier */
+  /** [0] L1 change-note commitment (0-value for a full withdrawal). */
+  newCommitmentHashL1: bigint;
+  /** [1] `C_dest` — the bridged L2 destination commitment. */
+  newCommitmentHashL2: bigint;
+  /** [2] Hash of the spent note's nullifier. */
   existingNullifierHash: bigint;
-  /** Withdrawn value */
+  /** [3] Withdrawn (bridged) value. */
   withdrawnValue: bigint;
-  /** State root */
+  /** [4] State root the inclusion proof was built against. */
   stateRoot: bigint;
-  /** Depth of the state tree */
+  /** [5] Depth of the state tree. */
   stateTreeDepth: bigint;
-  /** ASP root */
+  /** [6] ASP association root. */
   ASPRoot: bigint;
-  /** Depth of the ASP tree */
+  /** [7] Depth of the ASP tree. */
   ASPTreeDepth: bigint;
-  /** Context value */
+  /** [8] Context binding the proof to the relay request. */
   context: bigint;
 }
 
@@ -40,7 +45,7 @@ export interface WithdrawPublicSignals {
  */
 export interface RelayRequestBody {
   /** Withdrawal details */
-  withdrawal: SdkWithdrawal;
+  withdrawal: RelayWithdrawal;
   /** Public signals as string array */
   publicSignals: string[];
   /** Proof details */
@@ -58,7 +63,7 @@ export interface RelayRequestBody {
  */
 export interface WithdrawalPayload {
   readonly proof: WithdrawalProof;
-  readonly withdrawal: SdkWithdrawal;
+  readonly withdrawal: RelayWithdrawal;
   readonly scope: bigint;
   readonly feeCommitment?: FeeCommitment;
 }

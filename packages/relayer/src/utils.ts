@@ -16,23 +16,28 @@ import {
   RelayRequestBody,
   WithdrawPublicSignals,
 } from "./interfaces/relayer/request.js";
-import { FeeDataAbi } from "./types/abi.types.js";
+import { RelayDataAbi } from "./types/abi.types.js";
 import { getFeeReceiverAddress, getSignerPrivateKey } from "./config/index.js";
 import { privateKeyToAccount } from "viem/accounts";
 
+/**
+ * The decoded Mode-3 relay `data` payload. `ephemeralKey`/`viewTag` are the
+ * stealth material the recipient scans for; they are fee-irrelevant but part of
+ * the on-chain bytes the proof context binds, so they must round-trip exactly.
+ */
 interface WithdrawalData {
   recipient: Address,
   feeRecipient: Address,
+  ephemeralKey: readonly [bigint, bigint],
+  viewTag: `0x${string}`,
   relayFeeBPS: bigint;
 }
 
 export function decodeWithdrawalData(data: `0x${string}`): WithdrawalData {
   try {
-    const [{ recipient, feeRecipient, relayFeeBPS }] = decodeAbiParameters(
-      FeeDataAbi,
-      data,
-    );
-    return { recipient, feeRecipient, relayFeeBPS };
+    const [{ recipient, feeRecipient, ephemeralKey, viewTag, relayFeeBPS }] =
+      decodeAbiParameters(RelayDataAbi, data);
+    return { recipient, feeRecipient, ephemeralKey, viewTag, relayFeeBPS };
   } catch (e) {
     const error = e as DecodeAbiParametersErrorType;
     throw WithdrawalValidationError.invalidWithdrawalAbi({
@@ -44,7 +49,7 @@ export function decodeWithdrawalData(data: `0x${string}`): WithdrawalData {
 
 export function encodeWithdrawalData(withdrawalData: WithdrawalData): `0x${string}` {
   try {
-    return encodeAbiParameters(FeeDataAbi, [withdrawalData]);
+    return encodeAbiParameters(RelayDataAbi, [withdrawalData]);
   } catch (e) {
     const error = e as EncodeAbiParametersErrorType;
     throw WithdrawalValidationError.invalidWithdrawalAbi({
@@ -65,16 +70,19 @@ export function parseSignals(
       details: `Signals ${badSignals.join(", ")} are undefined`,
     });
   }
-  /// XXX: beware this signal distribution is based on how the circuits were compiled with circomkit, first 2 are the public outputs, next are the public inputs
+  /// Mode-3 `withdrawL1` layout (matches the SDK's WITHDRAW_L1_SIGNALS). Circom
+  /// emits circuit outputs first: the L1 change note AND the bridged C_dest lead,
+  /// so `withdrawnValue`/`context` are shifted vs the old single-output circuit.
   return {
-    newCommitmentHash: BigInt(signals[0]!), // Hash of new commitment
-    existingNullifierHash: BigInt(signals[1]!), // Hash of the existing commitment nullifier
-    withdrawnValue: BigInt(signals[2]!),
-    stateRoot: BigInt(signals[3]!),
-    stateTreeDepth: BigInt(signals[4]!),
-    ASPRoot: BigInt(signals[5]!),
-    ASPTreeDepth: BigInt(signals[6]!),
-    context: BigInt(signals[7]!),
+    newCommitmentHashL1: BigInt(signals[0]!), // [0] L1 change-note commitment
+    newCommitmentHashL2: BigInt(signals[1]!), // [1] C_dest (bridged L2 note)
+    existingNullifierHash: BigInt(signals[2]!), // [2] spent note nullifier
+    withdrawnValue: BigInt(signals[3]!), // [3]
+    stateRoot: BigInt(signals[4]!), // [4]
+    stateTreeDepth: BigInt(signals[5]!), // [5]
+    ASPRoot: BigInt(signals[6]!), // [6]
+    ASPTreeDepth: BigInt(signals[7]!), // [7]
+    context: BigInt(signals[8]!), // [8]
   };
 }
 

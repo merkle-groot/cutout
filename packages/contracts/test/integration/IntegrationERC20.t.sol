@@ -5,7 +5,7 @@ import {IntegrationBase} from './IntegrationBase.sol';
 
 import {IERC20} from '@oz/interfaces/IERC20.sol';
 
-import {PrivacyPoolComplex} from 'contracts/implementations/PrivacyPoolComplex.sol';
+import {PrivacyPool} from 'contracts/PrivacyPool.sol';
 import {InternalLeanIMT, LeanIMTData} from '@zk-kit/lean-imt.sol/InternalLeanIMT.sol';
 
 import {IPrivacyPool} from 'interfaces/IPrivacyPool.sol';
@@ -398,8 +398,8 @@ contract IntegrationERC20 is IntegrationBase {
 
     vm.startPrank(_OWNER);
 
-    // Deploy USDT pool
-    PrivacyPoolComplex _usdtPool = new PrivacyPoolComplex(
+    // Deploy USDT pool (unified pool; ERC20 via the _asset arg)
+    PrivacyPool _usdtPool = new PrivacyPool(
       address(_entrypoint), address(_withdrawalVerifier), address(_commitmentVerifier), address(_USDT)
     );
 

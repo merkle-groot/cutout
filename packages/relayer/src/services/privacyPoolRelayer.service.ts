@@ -4,7 +4,6 @@
 import { Address, getAddress } from "viem";
 import {
   getAssetConfig,
-  getEntrypointAddress,
   getFeeReceiverAddress,
   getSignerPrivateKey
 } from "../config/index.js";
@@ -27,7 +26,7 @@ import { Web3Provider } from "../providers/web3.provider.js";
 import { FeeCommitment } from "../interfaces/relayer/common.js";
 import { uniswapProvider } from "../providers/index.js";
 import { WRAPPED_NATIVE_TOKEN_ADDRESS } from "../providers/uniswap/constants.js";
-import { Withdrawal, WithdrawalProof } from "@0xbow/privacy-pools-core-sdk";
+import { RelayWithdrawal, WithdrawalProof } from "@0xbow/privacy-pools-core-sdk";
 import { privateKeyToAccount } from "viem/accounts";
 
 /**
@@ -139,7 +138,7 @@ export class PrivacyPoolRelayer {
     }
   }
 
-  async swapForNativeAndFund(scope: bigint, withdrawal: Withdrawal, proof: WithdrawalProof, chainId: number, relayTx: string) {
+  async swapForNativeAndFund(scope: bigint, withdrawal: RelayWithdrawal, proof: WithdrawalProof, chainId: number, relayTx: string) {
 
     const { assetAddress } = await this.sdkProvider.scopeData(scope, chainId);
     if (isNative(assetAddress)) {
@@ -219,7 +218,6 @@ export class PrivacyPoolRelayer {
    * @throws {ValidationError} - If public signals are malformed.
    */
   protected async validateWithdrawal(wp: WithdrawalPayload, chainId: number) {
-    const entrypointAddress = getEntrypointAddress(chainId);
     const feeReceiverAddress = getFeeReceiverAddress(chainId);
     const signerAddress = privateKeyToAccount(getSignerPrivateKey(chainId) as `0x${string}`).address;
 
@@ -242,9 +240,13 @@ export class PrivacyPoolRelayer {
       );
     }
 
-    if (wp.withdrawal.processooor !== entrypointAddress) {
-      throw WithdrawalValidationError.processooorMismatch(
-        `Processooor mismatch: expected "${entrypointAddress}", got "${wp.withdrawal.processooor}".`,
+    // Mode-3 has no `processooor`: the relay is submitted directly to the L1
+    // pool and targets a DESTINATION `chainId`. The destination is bound into
+    // the proof context (checked below) and enforced on-chain (UnsupportedChain);
+    // reject an obviously invalid destination early.
+    if (wp.withdrawal.chainId <= 0n) {
+      throw WithdrawalValidationError.unsupportedDestinationChain(
+        `Invalid destination chainId: "${wp.withdrawal.chainId}".`,
       );
     }
 
@@ -262,8 +264,11 @@ export class PrivacyPoolRelayer {
       }
     }
 
+    // Option 2: the signed commitment's `withdrawalData` is byte-identical to
+    // `wp.withdrawal.data` (enforced above), so either can seed the context; use
+    // the destination-bound relay shape `{chainId, data}`.
     const withdrawalContext = BigInt(
-      this.sdkProvider.calculateContext({ processooor: wp.withdrawal.processooor, data: withdrawalData }, wp.scope),
+      this.sdkProvider.calculateContext({ chainId: wp.withdrawal.chainId, data: withdrawalData }, wp.scope),
     );
     if (proofSignals.context !== withdrawalContext) {
       throw WithdrawalValidationError.contextMismatch(

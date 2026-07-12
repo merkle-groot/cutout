@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ContractInteractionsService } from "../../src/core/contracts.service.js";
 import { Hex, Address, Chain } from "viem";
-import { Withdrawal, WithdrawalProof } from "../../src/types/withdrawal.js";
+import {
+  RelayWithdrawal,
+  Withdrawal,
+  WithdrawalProof,
+} from "../../src/types/withdrawal.js";
 import { CommitmentProof } from "../../src/types/commitment.js";
 import { ContractError } from "../../src/errors/base.error.js";
 import { Hash } from "../../src/types/commitment.js";
@@ -36,6 +40,12 @@ const mockTransactionHash =
 // Mock withdrawal and proof
 const mockWithdrawal: Withdrawal = {
   processooor: "0xProcessorAddress",
+  data: "0xData",
+};
+
+// Mode-3 relay withdrawal shape ({chainId, data}).
+const mockRelayWithdrawal: RelayWithdrawal = {
+  chainId: 11155420n,
   data: "0xData",
 };
 
@@ -156,7 +166,7 @@ describe("ContractInteractionsService", () => {
     mockWalletClient.writeContract.mockResolvedValue(mockTransactionHash);
 
     const result = await service.withdraw(
-      mockWithdrawal,
+      mockRelayWithdrawal,
       mockWithdrawalProof,
       BigInt(0) as Hash,
     );
@@ -175,7 +185,7 @@ describe("ContractInteractionsService", () => {
     );
 
     await expect(
-      service.withdraw(mockWithdrawal, mockWithdrawalProof, BigInt(0) as Hash),
+      service.withdraw(mockRelayWithdrawal, mockWithdrawalProof, BigInt(0) as Hash),
     ).rejects.toThrow(Error);
   });
 

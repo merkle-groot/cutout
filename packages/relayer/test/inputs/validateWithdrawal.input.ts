@@ -6,13 +6,16 @@ import {
   RECIPIENT_TEST,
 } from "./default.input";
 
-const FeeDataAbi = [
+// Mode-3 RelayData: fee terms + stealth material (ephemeralKey, viewTag).
+const RelayDataAbi = [
   {
-    name: "FeeData",
+    name: "RelayData",
     type: "tuple",
     components: [
       { name: "recipient", type: "address" },
       { name: "feeRecipient", type: "address" },
+      { name: "ephemeralKey", type: "uint256[2]" },
+      { name: "viewTag", type: "bytes1" },
       { name: "relayFeeBPS", type: "uint256" },
     ],
   },
@@ -23,10 +26,12 @@ export function createData(
   feeRecipient: string,
   relayFeeBPS: bigint,
 ): Hex {
-  return encodeAbiParameters(FeeDataAbi, [
+  return encodeAbiParameters(RelayDataAbi, [
     {
       recipient: getAddress(recipient),
       feeRecipient: getAddress(feeRecipient),
+      ephemeralKey: [0n, 0n],
+      viewTag: "0x00",
       relayFeeBPS,
     },
   ]) as Hex;

@@ -3,8 +3,20 @@ import {
   PrivacyPoolSDK,
   Circuits,
   getCommitment,
+  derivePublicKey,
+  computeSharedSecretX,
 } from "@0xbow/privacy-pools-core-sdk";
 import { encodeAbiParameters, decodeAbiParameters } from "viem";
+
+// Fixed Mode-3 stealth vectors (same family as the circuits e2e run). The L1
+// `withdrawL1` proof folds the recipient spend key `B` and the ECDH shared
+// secret `ssX` into the bridged `C_dest` (pubSignals[1]); the Solidity relay
+// only checks the note preimage / roots / context, so these can be deterministic
+// here — a botched stealth derivation would only grief a real sender, never the
+// on-chain soundness the integration tests exercise.
+const RECIPIENT_SPEND_KEY = 987654321098765n; // b
+const RECIPIENT_VIEW_KEY = 123456789012345n; // v
+const SENDER_EPHEMERAL = 555555555555n; // e
 
 function padSiblings(siblings, treeDepth) {
   const paddedSiblings = [...siblings];
@@ -79,14 +91,19 @@ async function main() {
     const paddedStateSiblings = padSiblings(stateMerkleProof[2], 32);
     const paddedAspSiblings = padSiblings(aspMerkleProof[2], 32);
 
-    // Wrap the proveWithdrawal call with stdout redirection
+    // Derive the stealth binding: spendingPublicKey B = b·G, ssX = e·V.
+    const spendingPublicKey = derivePublicKey(RECIPIENT_SPEND_KEY);
+    const viewPublicKey = derivePublicKey(RECIPIENT_VIEW_KEY);
+    const sharedSecretX = computeSharedSecretX(SENDER_EPHEMERAL, viewPublicKey);
+
+    // Wrap the proveWithdrawalL1 call with stdout redirection
     const silentProveWithdrawal = withSilentStdout(
-      sdk.proveWithdrawal.bind(sdk),
+      sdk.proveWithdrawalL1.bind(sdk),
     );
 
     const { proof, publicSignals } = await silentProveWithdrawal(commitment, {
       context,
-      withdrawalAmount: withdrawnValue,
+      withdrawnValue,
       stateMerkleProof: {
         root: stateMerkleProof[0],
         leaf: commitment.hash,
@@ -103,6 +120,8 @@ async function main() {
       stateTreeDepth: parseInt(stateTreeDepth),
       aspRoot: aspMerkleProof[0],
       aspTreeDepth: parseInt(aspTreeDepth),
+      spendingPublicKey,
+      sharedSecretX,
       newSecret,
       newNullifier,
     });
@@ -114,6 +133,8 @@ async function main() {
         [BigInt(proof.pi_b[1][1]), BigInt(proof.pi_b[1][0])],
       ],
       _pC: [BigInt(proof.pi_c[0]), BigInt(proof.pi_c[1])],
+      // Mode-3 withdrawL1 emits 9 public signals (adds newCommitmentHashL2 /
+      // C_dest at index 1); on-chain ProofLib.WithdrawProof.pubSignals is uint256[9].
       _pubSignals: [
         publicSignals[0],
         publicSignals[1],
@@ -123,6 +144,7 @@ async function main() {
         publicSignals[5],
         publicSignals[6],
         publicSignals[7],
+        publicSignals[8],
       ].map((x) => BigInt(x)),
     };
 
@@ -134,7 +156,7 @@ async function main() {
             { name: "_pA", type: "uint256[2]" },
             { name: "_pB", type: "uint256[2][2]" },
             { name: "_pC", type: "uint256[2]" },
-            { name: "_pubSignals", type: "uint256[8]" },
+            { name: "_pubSignals", type: "uint256[9]" },
           ],
         },
       ],

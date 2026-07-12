@@ -2,10 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {Entrypoint, IEntrypoint} from 'contracts/Entrypoint.sol';
-import {IPrivacyPool} from 'contracts/PrivacyPool.sol';
-
-import {PrivacyPoolComplex} from 'contracts/implementations/PrivacyPoolComplex.sol';
-import {PrivacyPoolSimple} from 'contracts/implementations/PrivacyPoolSimple.sol';
+import {IPrivacyPool, PrivacyPool} from 'contracts/PrivacyPool.sol';
 
 import {ProofLib} from 'contracts/lib/ProofLib.sol';
 import {InternalLeanIMT, LeanIMTData} from '@zk-kit/lean-imt.sol/InternalLeanIMT.sol';
@@ -43,11 +40,18 @@ contract Setup is HandlerActors, GhostStorage, FuzzUtils {
       payable(UnsafeUpgrades.deployUUPSProxy(_impl, abi.encodeCall(Entrypoint.initialize, (OWNER, POSTMAN))))
     );
 
-    nativePool =
-      IPrivacyPool(address(new PrivacyPoolSimple(address(entrypoint), address(mockVerifier), address(mockVerifier))));
+    // Unified pool: native asset vs ERC20 is selected by the `_asset` arg
+    // (`Constants.NATIVE_ASSET` for ETH), replacing the old Simple/Complex split.
+    nativePool = IPrivacyPool(
+      address(
+        new PrivacyPool(
+          address(entrypoint), address(mockVerifier), address(mockVerifier), Constants.NATIVE_ASSET
+        )
+      )
+    );
 
     tokenPool = IPrivacyPool(
-      address(new PrivacyPoolComplex(address(entrypoint), address(mockVerifier), address(mockVerifier), address(token)))
+      address(new PrivacyPool(address(entrypoint), address(mockVerifier), address(mockVerifier), address(token)))
     );
 
     vm.prank(OWNER);

@@ -60,7 +60,7 @@ describe("Circuits", () => {
         .mockRejectedValue(fetchArtifactError);
       await expect(
         async () =>
-          await circuits._downloadCircuitArtifacts(CircuitName.Withdraw),
+          await circuits._downloadCircuitArtifacts(CircuitName.WithdrawL1),
       ).rejects.toThrowError(FetchArtifact);
       expect(fetchVersionedSpy).toHaveBeenCalled();
     });
@@ -110,8 +110,8 @@ describe("Circuits", () => {
     });
 
     it("returns wasm", async () => {
-      expect(await circuits.getWasm(CircuitName.Withdraw)).toStrictEqual(
-        binariesMock.withdraw.wasm,
+      expect(await circuits.getWasm(CircuitName.WithdrawL1)).toStrictEqual(
+        binariesMock.withdrawL1.wasm,
       );
       expect(await circuits.getWasm(CircuitName.Commitment)).toStrictEqual(
         binariesMock.commitment.wasm,
@@ -119,8 +119,8 @@ describe("Circuits", () => {
     });
 
     it("returns proving key", async () => {
-      expect(await circuits.getProvingKey(CircuitName.Withdraw)).toStrictEqual(
-        binariesMock.withdraw.zkey,
+      expect(await circuits.getProvingKey(CircuitName.WithdrawL1)).toStrictEqual(
+        binariesMock.withdrawL1.zkey,
       );
       expect(
         await circuits.getProvingKey(CircuitName.Commitment),
@@ -129,8 +129,8 @@ describe("Circuits", () => {
 
     it("returns verifying key", async () => {
       expect(
-        await circuits.getVerificationKey(CircuitName.Withdraw),
-      ).toStrictEqual(binariesMock.withdraw.vkey);
+        await circuits.getVerificationKey(CircuitName.WithdrawL1),
+      ).toStrictEqual(binariesMock.withdrawL1.vkey);
       expect(
         await circuits.getVerificationKey(CircuitName.Commitment),
       ).toStrictEqual(binariesMock.commitment.vkey);

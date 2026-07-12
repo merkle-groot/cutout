@@ -1,5 +1,6 @@
 export * from "./types/index.js";
 export * from "./crypto.js";
+export * from "./stealth.js";
 export * from "./external.js";
 export { PrivacyPoolSDK } from "./core/sdk.js";
 
@@ -17,5 +18,6 @@ export * from "./interfaces/circuits.interface.js";
 // Services (exported for advanced usage)
 export { CommitmentService } from "./core/commitment.service.js";
 export { WithdrawalService } from "./core/withdrawal.service.js";
+export { NoteService } from "./core/note.service.js";
 export { AccountService } from "./core/account.service.js";
 export { DataService } from "./core/data.service.js";

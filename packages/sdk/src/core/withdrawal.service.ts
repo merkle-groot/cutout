@@ -4,33 +4,43 @@ import {
   CircuitName,
   CircuitsInterface,
 } from "../interfaces/circuits.interface.js";
-import { WithdrawalProof, WithdrawalProofInput } from "../types/withdrawal.js";
+import {
+  WithdrawalProof,
+  WithdrawL1ProofInput,
+  WithdrawL2ProofInput,
+  WithdrawalProofInput,
+} from "../types/withdrawal.js";
 import { AccountCommitment, Commitment } from "../index.js";
 
 /**
- * Service responsible for handling withdrawal-related operations.
+ * Service responsible for handling Mode-3 withdrawal proof generation.
+ *
+ * A Cutout withdrawal has two proven legs (CLAUDE.md §5–6):
+ *  - `withdrawL1` — burns the spent L1 note and emits the bridged destination
+ *    commitment `C_dest` (9 public signals).
+ *  - `withdrawL2` — spends the delivered stealth note in the destination
+ *    shielded pool (5 public signals).
  */
 export class WithdrawalService {
   constructor(private readonly circuits: CircuitsInterface) {}
 
   /**
-   * Generates a withdrawal proof.
+   * Generates a Mode-3 `withdrawL1` (relay) proof. Input signals mirror
+   * `packages/circuits/scripts/e2e/relay.mjs`; the circuit outputs the L1 change
+   * note and `C_dest` (see `WITHDRAW_L1_SIGNALS`).
    *
-   * @param commitment - Commitment to withdraw
-   * @param input - Input parameters for the withdrawal
-   * @param withdrawal - Withdrawal details
-   * @returns Promise resolving to withdrawal payload
-   * @throws {ProofError} If proof generation fails
+   * @param commitment - The L1 note being spent.
+   * @param input - `withdrawL1` proof inputs.
+   * @throws {ProofError} If proof generation fails.
    */
-  public async proveWithdrawal(
+  public async proveWithdrawalL1(
     commitment: Commitment | AccountCommitment,
-    input: WithdrawalProofInput
+    input: WithdrawL1ProofInput,
   ): Promise<WithdrawalProof> {
     try {
-      const inputSignals = this.prepareInputSignals(commitment, input);
-
-      const wasm = await this.circuits.getWasm(CircuitName.Withdraw);
-      const zkey = await this.circuits.getProvingKey(CircuitName.Withdraw);
+      const inputSignals = this.prepareL1InputSignals(commitment, input);
+      const wasm = await this.circuits.getWasm(CircuitName.WithdrawL1);
+      const zkey = await this.circuits.getProvingKey(CircuitName.WithdrawL1);
 
       const { proof, publicSignals } = await snarkjs.groth16.fullProve(
         inputSignals,
@@ -38,10 +48,7 @@ export class WithdrawalService {
         zkey,
       );
 
-      return {
-        proof,
-        publicSignals,
-      };
+      return { proof, publicSignals };
     } catch (error) {
       throw ProofError.generationFailed({
         error: error instanceof Error ? error.message : "Unknown error",
@@ -50,19 +57,62 @@ export class WithdrawalService {
   }
 
   /**
-   * Verifies a withdrawal proof.
+   * Generates a Mode-3 `withdrawL2` (spend) proof. Input signals mirror
+   * `packages/circuits/scripts/e2e/l2withdraw.mjs`. Public-signal order MUST be
+   * `[0]=nullifier, [1]=noteValue` to match `L2ProofLib.sol` (see
+   * `WITHDRAW_L2_SIGNALS`).
    *
-   * @param withdrawalPayload - The withdrawal payload to verify
-   * @returns Promise resolving to boolean indicating proof validity
-   * @throws {ProofError} If verification fails
+   * @param input - `withdrawL2` proof inputs.
+   * @throws {ProofError} If proof generation fails.
    */
-  public async verifyWithdrawal(
+  public async proveWithdrawalL2(
+    input: WithdrawL2ProofInput,
+  ): Promise<WithdrawalProof> {
+    try {
+      const inputSignals = this.prepareL2InputSignals(input);
+      const wasm = await this.circuits.getWasm(CircuitName.WithdrawL2);
+      const zkey = await this.circuits.getProvingKey(CircuitName.WithdrawL2);
+
+      const { proof, publicSignals } = await snarkjs.groth16.fullProve(
+        inputSignals,
+        wasm,
+        zkey,
+      );
+
+      return { proof, publicSignals };
+    } catch (error) {
+      throw ProofError.generationFailed({
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
+
+  /**
+   * Verifies a `withdrawL1` proof against the L1 verification key.
+   * @throws {ProofError} If verification fails.
+   */
+  public async verifyWithdrawalL1(
+    withdrawalPayload: WithdrawalProof,
+  ): Promise<boolean> {
+    return this.verifyWith(CircuitName.WithdrawL1, withdrawalPayload);
+  }
+
+  /**
+   * Verifies a `withdrawL2` proof against the L2 verification key.
+   * @throws {ProofError} If verification fails.
+   */
+  public async verifyWithdrawalL2(
+    withdrawalPayload: WithdrawalProof,
+  ): Promise<boolean> {
+    return this.verifyWith(CircuitName.WithdrawL2, withdrawalPayload);
+  }
+
+  private async verifyWith(
+    circuit: CircuitName.WithdrawL1 | CircuitName.WithdrawL2,
     withdrawalPayload: WithdrawalProof,
   ): Promise<boolean> {
     try {
-      const vkeyBin = await this.circuits.getVerificationKey(
-        CircuitName.Withdraw,
-      );
+      const vkeyBin = await this.circuits.getVerificationKey(circuit);
       const vkey = JSON.parse(new TextDecoder("utf-8").decode(vkeyBin));
       return await snarkjs.groth16.verify(
         vkey,
@@ -77,11 +127,37 @@ export class WithdrawalService {
   }
 
   /**
-   * Prepares input signals for the withdrawal circuit.
+   * @deprecated Use {@link proveWithdrawalL1}. Thin shim retained until
+   * consumers migrate to the split API (Phase 6). Maps the legacy
+   * `withdrawalAmount` field to `withdrawnValue` and forwards.
    */
-  private prepareInputSignals(
+  public async proveWithdrawal(
+    _commitment: Commitment | AccountCommitment,
+    _input: WithdrawalProofInput,
+  ): Promise<WithdrawalProof> {
+    throw ProofError.generationFailed({
+      error:
+        "proveWithdrawal is removed in Mode-3; use proveWithdrawalL1 with a " +
+        "WithdrawL1ProofInput (adds spendingPublicKey + sharedSecretX).",
+    });
+  }
+
+  /**
+   * @deprecated Use {@link verifyWithdrawalL1} / {@link verifyWithdrawalL2}.
+   */
+  public async verifyWithdrawal(
+    withdrawalPayload: WithdrawalProof,
+  ): Promise<boolean> {
+    // Legacy callers verified the (single) withdrawal proof; route to L1.
+    return this.verifyWithdrawalL1(withdrawalPayload);
+  }
+
+  /**
+   * Prepares input signals for the `withdrawL1` circuit.
+   */
+  private prepareL1InputSignals(
     commitment: Commitment | AccountCommitment,
-    input: WithdrawalProofInput
+    input: WithdrawL1ProofInput,
   ): Record<string, bigint | bigint[] | string> {
     let existingValue: bigint;
     let existingNullifier: bigint;
@@ -101,26 +177,58 @@ export class WithdrawalService {
 
     return {
       // Public signals
-      withdrawnValue: input.withdrawalAmount,
+      withdrawnValue: input.withdrawnValue,
       stateRoot: input.stateRoot,
       stateTreeDepth: input.stateTreeDepth,
       ASPRoot: input.aspRoot,
       ASPTreeDepth: input.aspTreeDepth,
       context: input.context,
 
-      // Private signals
+      // Private signals — spent note preimage
       label,
       existingValue,
       existingNullifier,
       existingSecret,
+
+      // Stealth binding (folded into C_dest via P)
+      spendingPublicKey: [
+        input.spendingPublicKey[0],
+        input.spendingPublicKey[1],
+      ],
+      sharedSecretX: input.sharedSecretX,
+
+      // L1 change note
       newNullifier: input.newNullifier,
       newSecret: input.newSecret,
 
-      // Merkle Proofs
+      // Merkle proofs
       stateSiblings: input.stateMerkleProof.siblings,
       stateIndex: BigInt(input.stateMerkleProof.index),
       ASPSiblings: input.aspMerkleProof.siblings,
       ASPIndex: BigInt(input.aspMerkleProof.index),
+    };
+  }
+
+  /**
+   * Prepares input signals for the `withdrawL2` circuit.
+   */
+  private prepareL2InputSignals(
+    input: WithdrawL2ProofInput,
+  ): Record<string, bigint | bigint[] | string> {
+    return {
+      // Public signals
+      noteValue: input.noteValue,
+      stateRoot: input.stateRoot,
+      stateTreeDepth: input.stateTreeDepth,
+      context: input.context,
+
+      // Spend authorization (opens the Poseidon ownership constraint)
+      stealthPrivateKey: input.stealthPrivateKey,
+      sharedSecretX: input.sharedSecretX,
+
+      // Merkle proof
+      stateSiblings: input.stateMerkleProof.siblings,
+      stateIndex: BigInt(input.stateMerkleProof.index),
     };
   }
 }
