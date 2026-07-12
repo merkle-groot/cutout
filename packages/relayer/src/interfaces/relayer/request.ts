@@ -16,7 +16,7 @@ export interface ProofRelayerPayload {
 /**
  * Public signals for a Mode-3 `withdrawL1` (relay) proof. Circom emits circuit
  * outputs first, so the two `newCommitmentHash*` outputs lead; indices match
- * `WITHDRAW_L1_SIGNALS` in the SDK. 9 signals total (the L1 change note AND the
+ * `WITHDRAW_L1_SIGNALS` in the SDK. 10 signals total (the L1 change note AND the
  * bridged `C_dest`).
  */
 export interface WithdrawPublicSignals {
@@ -38,6 +38,8 @@ export interface WithdrawPublicSignals {
   ASPTreeDepth: bigint;
   /** [8] Context binding the proof to the relay request. */
   context: bigint;
+  /** [9] Net value delivered to L2 after the relay fee. */
+  bridgedValue: bigint;
 }
 
 /**

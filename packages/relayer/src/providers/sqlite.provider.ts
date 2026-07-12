@@ -2,6 +2,7 @@ import sqlite3 from "sqlite3";
 import { open, Database } from "sqlite";
 
 import path from "path";
+import { mkdir } from "node:fs/promises";
 import { CONFIG } from "../config/index.js";
 import { RelayerDatabase } from "../types/db.types.js";
 import {
@@ -57,13 +58,16 @@ CREATE TABLE IF NOT EXISTS requests (
    */
   async init(): Promise<void> {
     try {
+      // SQLite creates the file, but not missing parent directories.
+      await mkdir(path.dirname(this.dbPath), { recursive: true });
       this.db = await open({
         driver: sqlite3.Database,
         filename: this.dbPath,
       });
       await this.db.run(this.createTableRequest);
     } catch (error) {
-      console.log(error);
+      console.error("Unable to initialize SQLite database", error);
+      throw error;
     }
     this._initialized = true;
     console.log("sqlite db initialized");

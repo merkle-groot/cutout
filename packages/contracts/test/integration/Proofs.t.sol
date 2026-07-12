@@ -27,7 +27,18 @@ contract IntegrationProofs is IntegrationBase {
     vm.prank(_POSTMAN);
     _entrypoint.updateRoot(_shadowASPMerkleTree._root(), 'ipfs_cid_ipfs_cid_ipfs_cid_ipfs_cid_ipfs_cid_ipfs_cid');
 
-    _withdrawal = IPrivacyPool.Withdrawal({processooor: _BOB, data: abi.encode(_BOB, address(0), 0)});
+    _withdrawal = IPrivacyPool.Withdrawal({
+      chainId: 0,
+      data: abi.encode(
+        IPrivacyPool.RelayData({
+          recipient: _BOB,
+          feeRecipient: _BOB,
+          ephemeralKey: [uint256(1), uint256(1)],
+          viewTag: bytes1(0),
+          relayFeeBPS: 0
+        })
+      )
+    });
 
     _context = uint256(keccak256(abi.encode(_withdrawal, _ethPool.SCOPE()))) % SNARK_SCALAR_FIELD;
   }
@@ -190,7 +201,7 @@ contract IntegrationProofs is IntegrationBase {
 
     vm.expectRevert(IPrivacyPool.InvalidProof.selector);
     vm.prank(_BOB);
-    _ethPool.withdraw(_withdrawal, _proof);
+    _ethPool.relay(_withdrawal, _proof);
 
     // Reset
     _proof.pubSignals[0] = _proof.pubSignals[0] - 1;
@@ -204,7 +215,7 @@ contract IntegrationProofs is IntegrationBase {
 
     vm.expectRevert(IPrivacyPool.InvalidProof.selector);
     vm.prank(_BOB);
-    _ethPool.withdraw(_withdrawal, _proof);
+    _ethPool.relay(_withdrawal, _proof);
 
     // Reset
     _proof.pubSignals[1] = _proof.pubSignals[1] - 1;
@@ -218,7 +229,7 @@ contract IntegrationProofs is IntegrationBase {
 
     vm.expectRevert(IPrivacyPool.InvalidProof.selector);
     vm.prank(_BOB);
-    _ethPool.withdraw(_withdrawal, _proof);
+    _ethPool.relay(_withdrawal, _proof);
 
     // Reset
     _proof.pubSignals[2] = _proof.pubSignals[2] - 1;
@@ -232,7 +243,7 @@ contract IntegrationProofs is IntegrationBase {
 
     vm.expectRevert(IPrivacyPool.UnknownStateRoot.selector);
     vm.prank(_BOB);
-    _ethPool.withdraw(_withdrawal, _proof);
+    _ethPool.relay(_withdrawal, _proof);
 
     // Reset
     _proof.pubSignals[3] = _proof.pubSignals[3] - 1;
@@ -246,7 +257,7 @@ contract IntegrationProofs is IntegrationBase {
 
     vm.expectRevert(IPrivacyPool.InvalidProof.selector);
     vm.prank(_BOB);
-    _ethPool.withdraw(_withdrawal, _proof);
+    _ethPool.relay(_withdrawal, _proof);
 
     // Reset
     _proof.pubSignals[4] = _proof.pubSignals[4] - 1;
@@ -260,7 +271,7 @@ contract IntegrationProofs is IntegrationBase {
 
     vm.expectRevert(IPrivacyPool.IncorrectASPRoot.selector);
     vm.prank(_BOB);
-    _ethPool.withdraw(_withdrawal, _proof);
+    _ethPool.relay(_withdrawal, _proof);
 
     // Reset
     _proof.pubSignals[5] = _proof.pubSignals[5] - 1;
@@ -274,7 +285,7 @@ contract IntegrationProofs is IntegrationBase {
 
     vm.expectRevert(IPrivacyPool.InvalidProof.selector);
     vm.prank(_BOB);
-    _ethPool.withdraw(_withdrawal, _proof);
+    _ethPool.relay(_withdrawal, _proof);
 
     // Reset
     _proof.pubSignals[6] = _proof.pubSignals[6] - 1;
@@ -288,6 +299,6 @@ contract IntegrationProofs is IntegrationBase {
 
     vm.expectRevert(IPrivacyPool.ContextMismatch.selector);
     vm.prank(_BOB);
-    _ethPool.withdraw(_withdrawal, _proof);
+    _ethPool.relay(_withdrawal, _proof);
   }
 }

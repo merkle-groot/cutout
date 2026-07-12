@@ -128,6 +128,8 @@ contract PrivacyPool is State, ReentrancyGuard, IPrivacyPool {
     uint256 _amountAfterFees = _deductFee(_withdrawnValue, _data.relayFeeBPS);
     uint256 _feeAmount = _withdrawnValue - _amountAfterFees;
 
+    if (_proof.bridgedValue() != _amountAfterFees) revert BridgedValueMismatch();
+
     uint256 _newCommitmentHashL2 = _proof.newCommitmentHashL2();
 
     // Bridge withdrawn funds directly to the destination L2 pool (the bridge lock). Returns the

@@ -47,7 +47,7 @@ describe("WithdrawL1 Circuit", () => {
       file: "withdrawL1",
       template: "WithdrawL1",
       params: [maxTreeDepth],
-      pubs: ["withdrawnValue", "stateRoot", "stateTreeDepth", "ASPRoot", "ASPTreeDepth", "context"],
+      pubs: ["withdrawnValue", "stateRoot", "stateTreeDepth", "ASPRoot", "ASPTreeDepth", "context", "bridgedValue"],
     });
   });
 
@@ -71,6 +71,7 @@ describe("WithdrawL1 Circuit", () => {
     const ASPProof = ASPTree.generateProof(3);
     return {
       withdrawnValue,
+      bridgedValue: withdrawnValue,
       stateRoot: stateProof.root,
       stateTreeDepth: stateTree.depth,
       ASPRoot: ASPProof.root,
@@ -91,7 +92,7 @@ describe("WithdrawL1 Circuit", () => {
     };
   }
 
-  function expectedOutputs(withdrawnValue: bigint, newNullifier: bigint, newSecret: bigint) {
+  function expectedOutputs(withdrawnValue: bigint, newNullifier: bigint, newSecret: bigint, bridgedValue = withdrawnValue) {
     const remainingValue = deposit.value - withdrawnValue;
     const [changeHash] = hashCommitment({
       value: remainingValue,
@@ -102,7 +103,7 @@ describe("WithdrawL1 Circuit", () => {
     const P = bj.stealthPubKey(B, ssX);
     return {
       newCommitmentHashL1: changeHash,
-      newCommitmentHashL2: hashL2Commitment(P, withdrawnValue, ssX),
+      newCommitmentHashL2: hashL2Commitment(P, bridgedValue, ssX),
       existingNullifierHash: depositNullifierHash,
     };
   }
@@ -150,6 +151,17 @@ describe("WithdrawL1 Circuit", () => {
       threw = true;
     }
     if (!threw) throw new Error("C_dest not bound to withdrawnValue");
+  });
+
+  it("binds C_dest to the net bridged value when a relay fee is present", async () => {
+    const newNullifier = randomBigInt();
+    const newSecret = randomBigInt();
+    const withdrawnValue = parseEther("2");
+    const bridgedValue = withdrawnValue - (withdrawnValue / 100n);
+    await circuit.expectPass(
+      { ...buildInput(withdrawnValue, newNullifier, newSecret), bridgedValue },
+      expectedOutputs(withdrawnValue, newNullifier, newSecret, bridgedValue),
+    );
   });
 
   describe("T2.5 negatives", () => {

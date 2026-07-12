@@ -54,6 +54,7 @@ abstract contract DeployProtocol is Script {
   }
 
   error ChainIdAndRPCMismatch();
+  error MissingDeploymentAddress();
 
   // @notice Deployed Entrypoint
   Entrypoint public entrypoint;
@@ -85,6 +86,10 @@ abstract contract DeployProtocol is Script {
     postman = vm.envAddress('POSTMAN_ADDRESS');
 
     deployer = vm.envAddress('DEPLOYER_ADDRESS');
+
+    if (owner == address(0) || postman == address(0) || deployer == address(0)) {
+      revert MissingDeploymentAddress();
+    }
   }
 
   // @dev Must be called with the `--account` flag which acts as the caller

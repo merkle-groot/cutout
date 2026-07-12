@@ -1,0 +1,23 @@
+{
+  "name": "f5-relayer-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:client": "node scripts/vite.mjs --host 0.0.0.0",
+    "dev:server": "node server/index.mjs",
+    "build": "node scripts/vite.mjs build",
+    "start": "node server/index.mjs"
+  },
+  "dependencies": {
+    "@0xbow/privacy-pools-core-sdk": "1.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
+    "express": "4.21.2",
+    "viem": "2.22.14"
+  },
+  "devDependencies": {
+    "vite": "^6.1.0"
+  }
+}

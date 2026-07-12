@@ -233,6 +233,12 @@ export class PrivacyPoolRelayer {
 
     const { feeRecipient, relayFeeBPS } = decodeWithdrawalData(withdrawalData);
     const proofSignals = parseSignals(wp.proof.publicSignals);
+    const expectedBridgedValue = proofSignals.withdrawnValue - ((proofSignals.withdrawnValue * relayFeeBPS) / 10_000n);
+    if (proofSignals.bridgedValue !== expectedBridgedValue) {
+      throw WithdrawalValidationError.feeMismatch(
+        `Bridged value mismatch: expected "${expectedBridgedValue}", got "${proofSignals.bridgedValue}".`,
+      );
+    }
 
     if ((wp.feeCommitment !== undefined) && (wp.feeCommitment.amount > proofSignals.withdrawnValue)) {
       throw WithdrawalValidationError.withdrawnValueTooSmall(

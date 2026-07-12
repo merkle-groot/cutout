@@ -143,6 +143,9 @@ contract UnitPrivacyPool is Test {
     // [8] Context
     _p.pubSignals[8] = uint256(keccak256(abi.encode(_w, _scope))) % Constants.SNARK_SCALAR_FIELD;
 
+    // [9] Net destination value (unit tests use a zero relay fee here)
+    _p.pubSignals[9] = _p.pubSignals[3];
+
     _;
   }
 
@@ -481,7 +484,7 @@ contract UnitWithdraw is UnitPrivacyPool {
     _mockAndExpect(
       _WITHDRAWAL_VERIFIER,
       abi.encodeWithSignature(
-        'verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[9])', _p.pA, _p.pB, _p.pC, _p.pubSignals
+        'verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[10])', _p.pA, _p.pB, _p.pC, _p.pubSignals
       ),
       abi.encode(true)
     );
@@ -517,7 +520,7 @@ contract UnitWithdraw is UnitPrivacyPool {
     _mockAndExpect(
       _WITHDRAWAL_VERIFIER,
       abi.encodeWithSignature(
-        'verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[9])', _p.pA, _p.pB, _p.pC, _p.pubSignals
+        'verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[10])', _p.pA, _p.pB, _p.pC, _p.pubSignals
       ),
       abi.encode(true)
     );
@@ -539,7 +542,7 @@ contract UnitWithdraw is UnitPrivacyPool {
     _mockAndExpect(
       _WITHDRAWAL_VERIFIER,
       abi.encodeWithSignature(
-        'verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[9])', _p.pA, _p.pB, _p.pC, _p.pubSignals
+        'verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[10])', _p.pA, _p.pB, _p.pC, _p.pubSignals
       ),
       abi.encode(true)
     );

@@ -181,6 +181,9 @@ interface IPrivacyPool is IState {
    */
   error InsufficientBridgeFee();
 
+  /// @notice Thrown when the proof's destination value does not match the post-fee bridge amount
+  error BridgedValueMismatch();
+
   /**
    * @notice Thrown when the caller is not the Registry owner
    */

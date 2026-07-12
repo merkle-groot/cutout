@@ -41,6 +41,11 @@ export const zAssetConfig = z.object({
   min_withdraw_amount: zWithdrawAmount,
 });
 
+export const zAspPool = z.object({
+  pool_address: zAddress,
+  start_block: zNonNegativeBigInt,
+});
+
 // Native currency configuration schema
 export const zNativeCurrency = z.object({
   name: z.string().default("Ether"),
@@ -58,6 +63,7 @@ export const zChainConfig = z.object({
   signer_private_key: zPkey.optional(),
   entrypoint_address: zAddress.optional(),
   supported_assets: z.array(zAssetConfig).optional(),
+  asp_pools: z.array(zAspPool).default([]),
   native_currency: zNativeCurrency.optional(),
 });
 

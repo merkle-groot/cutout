@@ -17,6 +17,7 @@ template WithdrawL1(maxTreeDepth) {
 
   // Signals to compute commitments
   signal input withdrawnValue;                   // Value being withdrawn
+  signal input bridgedValue;                     // Net value delivered to L2 after relay fee
 
   // Signals for merkle tree inclusion proofs
   signal input stateRoot;                        // A known state root
@@ -93,6 +94,13 @@ template WithdrawL1(maxTreeDepth) {
   component withdrawnValueRangeCheck = Num2Bits(128);
   withdrawnValueRangeCheck.in <== withdrawnValue;
   _ <== withdrawnValueRangeCheck.out;
+  component bridgedValueRangeCheck = Num2Bits(128);
+  bridgedValueRangeCheck.in <== bridgedValue;
+  _ <== bridgedValueRangeCheck.out;
+  component bridgedValueOrderCheck = LessEqThan(128);
+  bridgedValueOrderCheck.in[0] <== bridgedValue;
+  bridgedValueOrderCheck.in[1] <== withdrawnValue;
+  bridgedValueOrderCheck.out === 1;
 
   // 6. Ensure the change note uses a fresh nullifier (not the spent one)
   component nullifierEqualityCheck = IsEqual();
@@ -114,7 +122,7 @@ template WithdrawL1(maxTreeDepth) {
   destCommitmentHasher.spendingPublicKey[0] <== spendingPublicKey[0];
   destCommitmentHasher.spendingPublicKey[1] <== spendingPublicKey[1];
   destCommitmentHasher.sharedSecretX <== sharedSecretX;
-  destCommitmentHasher.value <== withdrawnValue;
+  destCommitmentHasher.value <== bridgedValue;
 
   // 8. Output new commitment hashes
   newCommitmentHashL2 <== destCommitmentHasher.commitment;

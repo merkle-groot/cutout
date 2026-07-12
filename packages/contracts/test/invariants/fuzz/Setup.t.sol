@@ -68,7 +68,7 @@ contract Setup is HandlerActors, GhostStorage, FuzzUtils {
     createNewActors(5);
 
     for (uint256 i = 0; i < actors.length; i++) {
-      actors[i].call(address(token), 0, abi.encodeCall(IERC20.approve, (address(entrypoint), type(uint256).max)));
+      actors[i].call(address(token), 0, abi.encodeCall(IERC20.approve, (address(tokenPool), type(uint256).max)));
     }
   }
 }

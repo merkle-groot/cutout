@@ -156,19 +156,19 @@ contract IntegrationBase is IntegrationUtils {
   //////////////////////////////////////////////////////////////*/
 
   function _deposit(DepositParams memory _params) internal returns (Commitment memory _commitment) {
-    // Deal the asset to the depositor
-    _deal(_params.depositor, _params.asset, _params.amount);
-
-    // If not native asset, approve Entrypoint to deposit funds
-    if (_params.asset != IERC20(Constants.NATIVE_ASSET)) {
-      vm.prank(_params.depositor);
-      _params.asset.approve(address(_entrypoint), _params.amount);
-    }
-
     // Define pool to deposit to
     IPrivacyPool _pool = _params.asset == IERC20(Constants.NATIVE_ASSET)
       ? IPrivacyPool(address(_ethPool))
       : IPrivacyPool(address(_daiPool));
+
+    // Deal the asset to the depositor
+    _deal(_params.depositor, _params.asset, _params.amount);
+
+    // If not native asset, approve the pool to pull funds
+    if (_params.asset != IERC20(Constants.NATIVE_ASSET)) {
+      vm.prank(_params.depositor);
+      _params.asset.approve(address(_pool), _params.amount);
+    }
 
     // Fetch current nonce
     uint256 _currentNonce = _pool.nonce();
@@ -182,9 +182,6 @@ contract IntegrationBase is IntegrationUtils {
     _commitment.value = _deductFee(_params.amount, _VETTING_FEE_BPS);
     _commitment.precommitment = _hashPrecommitment(_commitment.nullifier, _commitment.secret);
     _commitment.hash = _hashCommitment(_commitment.value, _commitment.label, _commitment.precommitment);
-
-    // Calculate Entrypoint fee
-    uint256 _fee = _params.amount - _commitment.value;
 
     // Update mirrored trees
     _insertIntoShadowMerkleTree(_commitment.hash);
@@ -201,16 +198,12 @@ contract IntegrationBase is IntegrationUtils {
       _params.depositor, _commitment.hash, _commitment.label, _commitment.value, _commitment.precommitment
     );
 
-    // Expect Entrypoint event emission
-    vm.expectEmit(address(_entrypoint));
-    emit IEntrypoint.Deposited(_params.depositor, _pool, _commitment.hash, _commitment.value);
-
     // Deposit
     vm.prank(_params.depositor);
     if (_params.asset == IERC20(Constants.NATIVE_ASSET)) {
-      _entrypoint.deposit{value: _params.amount}(_commitment.precommitment);
+      _pool.deposit{value: _params.amount}(_commitment.precommitment);
     } else {
-      _entrypoint.deposit(_params.asset, _params.amount, _commitment.precommitment);
+      _pool.deposit(_params.amount, _commitment.precommitment);
     }
 
     // Check balance changes
@@ -218,7 +211,7 @@ contract IntegrationBase is IntegrationUtils {
       _balance(_params.depositor, _params.asset), _depositorInitialBalance - _params.amount, 'User balance mismatch'
     );
     assertEq(
-      _balance(address(_entrypoint), _params.asset), _entrypointInitialBalance + _fee, 'Entrypoint balance mismatch'
+      _balance(address(_entrypoint), _params.asset), _entrypointInitialBalance, 'Entrypoint balance mismatch'
     );
     assertEq(_balance(address(_pool), _params.asset), _poolInitialBalance + _commitment.value, 'Pool balance mismatch');
 
@@ -238,7 +231,18 @@ contract IntegrationBase is IntegrationUtils {
       : IPrivacyPool(address(_daiPool));
 
     // Build `Withdrawal` object for direct withdrawal
-    IPrivacyPool.Withdrawal memory _withdrawal = IPrivacyPool.Withdrawal({processooor: _params.recipient, data: ''});
+    IPrivacyPool.Withdrawal memory _withdrawal = IPrivacyPool.Withdrawal({
+      chainId: 0,
+      data: abi.encode(
+        IPrivacyPool.RelayData({
+          recipient: _params.recipient,
+          feeRecipient: _params.recipient,
+          ephemeralKey: [uint256(1), uint256(1)],
+          viewTag: bytes1(0),
+          relayFeeBPS: 0
+        })
+      )
+    });
 
     // Withdraw
     _commitment = _withdraw(_params.recipient, _pool, _withdrawal, _params, true);
@@ -252,8 +256,16 @@ contract IntegrationBase is IntegrationUtils {
 
     // Build `Withdrawal` object for relayed withdrawal
     IPrivacyPool.Withdrawal memory _withdrawal = IPrivacyPool.Withdrawal({
-      processooor: address(_entrypoint),
-      data: abi.encode(_params.recipient, _RELAYER, _VETTING_FEE_BPS)
+      chainId: 0,
+      data: abi.encode(
+        IPrivacyPool.RelayData({
+          recipient: _params.recipient,
+          feeRecipient: _RELAYER,
+          ephemeralKey: [uint256(1), uint256(1)],
+          viewTag: bytes1(0),
+          relayFeeBPS: _VETTING_FEE_BPS
+        })
+      )
     });
 
     // Withdraw
@@ -299,16 +311,10 @@ contract IntegrationBase is IntegrationUtils {
       })
     );
 
-    uint256 _scope = _pool.SCOPE();
-
     // Process withdrawal
     vm.prank(_caller);
     if (_params.revertReason != NONE) vm.expectRevert(_params.revertReason);
-    if (_direct) {
-      _pool.withdraw(_withdrawal, _proof);
-    } else {
-      _entrypoint.relay(_withdrawal, _proof, _scope);
-    }
+    _pool.relay(_withdrawal, _proof);
 
     if (_params.revertReason == NONE) {
       // Check nullifier hash has been spent

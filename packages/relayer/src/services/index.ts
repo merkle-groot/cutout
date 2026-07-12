@@ -4,3 +4,4 @@ import { QuoteService } from "./quote.service.js";
 
 export const privacyPoolRelayer = new PrivacyPoolRelayer();
 export const quoteService = new QuoteService();
+export * from "./testnetAsp.service.js";

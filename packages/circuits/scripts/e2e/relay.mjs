@@ -33,7 +33,7 @@ const pub = createPublicClient({ chain: sepolia, transport: http(RPC) });
 const poolAbi = parseAbi([
   'function SCOPE() view returns (uint256)',
   'function currentRoot() view returns (uint256)',
-  'function relay((uint256 chainId, bytes data) _withdrawal, (uint256[2] pA, uint256[2][2] pB, uint256[2] pC, uint256[9] pubSignals) _proof) payable',
+  'function relay((uint256 chainId, bytes data) _withdrawal, (uint256[2] pA, uint256[2][2] pB, uint256[2] pC, uint256[10] pubSignals) _proof) payable',
   'event Deposited(address indexed _depositor, uint256 _commitment, uint256 _label, uint256 _value, uint256 _precommitmentHash)',
   'event Withdrawn(uint256 _newCommitmentHashL1, uint256 _newComitmentHashL2, uint256 _value, uint256 _spentNullifier)',
   'event L2Note(uint256 indexed _newCommitmentHashL2, uint256[2] _ephemeralKey, bytes1 indexed _viewTag)',
@@ -128,6 +128,7 @@ console.log('context:', context.toString());
 const newNullifier = rand(), newSecret = rand();
 const input = {
   withdrawnValue: withdrawnValue,
+  bridgedValue: withdrawnValue,
   stateRoot: stateProof.root,
   stateTreeDepth: BigInt(stateTree.depth),
   ASPRoot: aspProof.root,

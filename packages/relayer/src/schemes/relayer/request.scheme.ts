@@ -49,7 +49,7 @@ export const zFeeCommitment = z.object({
 
 export const zRelayRequest = z.object({
   withdrawal: zWithdrawal,
-  publicSignals: z.array(z.string()).length(9),
+  publicSignals: z.array(z.string()).length(10),
   proof: zProof,
   scope: zNonNegativeBigInt,
   chainId: z.string().or(z.number()).pipe(z.coerce.number().positive()),

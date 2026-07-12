@@ -27,12 +27,13 @@ library ProofLib {
    *        - [6] ASPRoot: Current root of the Association Set Provider tree
    *        - [7] ASPTreeDepth: Current depth of the ASP tree
    *        - [8] context: Context value for the withdrawal operation
+   *        - [9] bridgedValue: Net value delivered to L2 after the relay fee
    */
   struct WithdrawProof {
     uint256[2] pA;
     uint256[2][2] pB;
     uint256[2] pC;
-    uint256[9] pubSignals;
+    uint256[10] pubSignals;
   }
 
   /**
@@ -114,6 +115,10 @@ library ProofLib {
    */
   function context(WithdrawProof memory _p) internal pure returns (uint256) {
     return _p.pubSignals[8];
+  }
+
+  function bridgedValue(WithdrawProof memory _p) internal pure returns (uint256) {
+    return _p.pubSignals[9];
   }
 
   /*///////////////////////////////////////////////////////////////

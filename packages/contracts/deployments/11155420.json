@@ -1,0 +1,20 @@
+{
+  "chainId": 11155420,
+  "contracts": [
+    {
+      "name": "L2WithdrawalVerifier",
+      "address": "0xeeed6485a583d197f2f5805ade7ec6ecbcda833d",
+      "deployer": "0x0eb4d30c3aea7beb5ce17c1533cefe755ec807e2",
+      "deploymentBlock": 46033723
+    },
+    {
+      "name": "L2PrivacyPool",
+      "address": "0xfbba1f089fc8e48559b52eb09ff1b07b943ab507",
+      "deployer": "0x0eb4d30c3aea7beb5ce17c1533cefe755ec807e2",
+      "deploymentBlock": 46033724,
+      "scope": 8383131592542634367180422738258337301671899119068926705702823907013257035311,
+      "asset": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "l1Pool": "0x8d508e422ed2bc102ba364875d2d83c172dc2288"
+    }
+  ]
+}

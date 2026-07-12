@@ -32,7 +32,7 @@ contract MintableERC20 is ERC20 {
 
 /// @notice Always-true Groth16 verifier for both proof sizes
 contract MockVerifier is IVerifier {
-  function verifyProof(uint256[2] memory, uint256[2][2] memory, uint256[2] memory, uint256[9] memory)
+  function verifyProof(uint256[2] memory, uint256[2][2] memory, uint256[2] memory, uint256[10] memory)
     external
     pure
     returns (bool)
@@ -379,6 +379,8 @@ contract MergedFlowTest is Test {
     _p.pubSignals[6] = registry.latestRoot(); // ASP root
     _p.pubSignals[7] = 1; // ASP tree depth
     _p.pubSignals[8] = uint256(keccak256(abi.encode(_w, _pool.SCOPE()))) % Constants.SNARK_SCALAR_FIELD; // context
+    IPrivacyPool.RelayData memory _data = abi.decode(_w.data, (IPrivacyPool.RelayData));
+    _p.pubSignals[9] = _withdrawnValue - ((_withdrawnValue * _data.relayFeeBPS) / 10_000); // net bridged value
   }
 
   function test_NativeRelayBridgesOnceAndPaysFeeOnce() public {

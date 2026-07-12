@@ -2,33 +2,26 @@
 pragma solidity ^0.8.0;
 
 import {Setup, vm} from '../Setup.t.sol';
-import {Constants, IPrivacyPool, IPrivacyPool, ProofLib} from 'contracts/PrivacyPool.sol';
-import {IEntrypoint} from 'interfaces/IEntrypoint.sol';
+import {Constants, IPrivacyPool, ProofLib} from 'contracts/PrivacyPool.sol';
 
 contract HandlersEntrypoint is Setup {
   function handler_deposit(uint256 _amount, uint256 _precommitment) public {
     _amount = clampLt(_amount, type(uint128).max / FEE_DENOMINATOR);
 
     uint256 _poolBalanceBefore = token.balanceOf(address(tokenPool));
-    uint256 _entrypointBalanceBefore = token.balanceOf(address(entrypoint));
-
-    vm.assume(entrypoint.usedPrecommitments(_precommitment) == false);
-
     token.transfer(address(currentActor()), _amount);
     (bool success, bytes memory result) = currentActor().call(
-      address(entrypoint),
+      address(tokenPool),
       0,
-      abi.encodeWithSignature('deposit(address,uint256,uint256)', token, _amount, _precommitment)
+      abi.encodeWithSignature('deposit(uint256,uint256)', _amount, _precommitment)
     );
 
     if (success) {
       // Accounting:
       uint256 _poolBalanceAfter = token.balanceOf(address(tokenPool));
-      uint256 _entrypointBalanceAfter = token.balanceOf(address(entrypoint));
 
       ghost_current_deposit_in_balance += _poolBalanceAfter - _poolBalanceBefore;
       ghost_total_token_in += _amount;
-      ghost_current_fee_in_balance += _entrypointBalanceAfter - _entrypointBalanceBefore;
 
       // deposit logic:
       uint256 _commitment = abi.decode(result, (uint256));
@@ -50,17 +43,17 @@ contract HandlersEntrypoint is Setup {
   }
 
   function handler_withdrawFees() public {
-    uint256 _entrypointBalanceBefore = token.balanceOf(address(entrypoint));
+    uint256 _poolBalanceBefore = token.balanceOf(address(tokenPool));
 
     vm.prank(OWNER);
-    try entrypoint.withdrawFees(token, OWNER) {
-      uint256 _entrypointBalanceAfter = token.balanceOf(address(entrypoint));
+    try tokenPool.withdrawFees(OWNER) {
+      uint256 _poolBalanceAfter = token.balanceOf(address(tokenPool));
 
-      assertTrue(_entrypointBalanceAfter == 0, 'non-zero: entrypoint balance after withdrawFees');
+      assertTrue(_poolBalanceAfter == 0, 'non-zero: pool balance after withdrawFees');
 
-      ghost_total_fee_out += _entrypointBalanceBefore;
-      ghost_total_token_out += _entrypointBalanceBefore;
-      ghost_current_fee_in_balance -= _entrypointBalanceBefore;
+      ghost_total_fee_out += _poolBalanceBefore;
+      ghost_total_token_out += _poolBalanceBefore;
+      ghost_current_fee_in_balance -= _poolBalanceBefore;
     } catch {
       assertTrue(false, 'non-revert: withdrawFees');
     }
@@ -95,7 +88,7 @@ contract HandlersEntrypoint is Setup {
     if (_numberOfCommitments == 0) revert();
 
     _deposit = ghost_depositsOf[_caller][_numberOfCommitments - 1];
-    _withdrawal = _buildWithdrawal(address(entrypoint), _caller);
+    _withdrawal = _buildWithdrawal(_caller);
 
     uint256 _context = uint256(keccak256(abi.encode(_withdrawal, tokenPool.SCOPE()))) % Constants.SNARK_SCALAR_FIELD;
 
@@ -146,8 +139,19 @@ contract HandlersEntrypoint is Setup {
      *        - [6] ASPTreeDepth: Current depth of the ASP tree
      *        - [7] context: Context value for the withdrawal operation
      */
-    uint256[8] memory pubSignals =
-      [_nullifier, _nullifier, _deposit, _poolRoot, _nullifier + 1, _aspRoot, _nullifier + 1, _context];
+    uint256 _bridgedValue = _deposit - ((_deposit * FEE_PROCESSING) / FEE_DENOMINATOR);
+    uint256[10] memory pubSignals = [
+      _nullifier,
+      _nullifier,
+      _nullifier,
+      _deposit,
+      _poolRoot,
+      _nullifier + 1,
+      _aspRoot,
+      _nullifier + 1,
+      _context,
+      _bridgedValue
+    ];
 
     return ProofLib.WithdrawProof({pA: _oneArray, pB: _twoArray, pC: _oneArray, pubSignals: pubSignals});
   }
@@ -174,12 +178,14 @@ contract HandlersEntrypoint is Setup {
     return ProofLib.RagequitProof({pA: _oneArray, pB: _twoArray, pC: _oneArray, pubSignals: pubSignals});
   }
 
-  function _buildWithdrawal(address _processooor, address _recipient) internal returns (IPrivacyPool.Withdrawal memory) {
-    IEntrypoint.RelayData memory _data = IEntrypoint.RelayData({
+  function _buildWithdrawal(address _recipient) internal view returns (IPrivacyPool.Withdrawal memory) {
+    IPrivacyPool.RelayData memory _data = IPrivacyPool.RelayData({
       recipient: _recipient,
       feeRecipient: ghost_processingFeeRecipient,
+      ephemeralKey: [uint256(1), uint256(1)],
+      viewTag: bytes1(0),
       relayFeeBPS: FEE_PROCESSING
     });
-    return IPrivacyPool.Withdrawal({processooor: _processooor, data: abi.encode(_data)});
+    return IPrivacyPool.Withdrawal({chainId: 0, data: abi.encode(_data)});
   }
 }

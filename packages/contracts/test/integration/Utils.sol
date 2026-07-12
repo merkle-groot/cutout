@@ -15,6 +15,8 @@ import {PoseidonT4} from 'poseidon/PoseidonT4.sol';
 contract IntegrationUtils is Test {
   using InternalLeanIMT for LeanIMTData;
 
+  uint256 internal constant _TEST_RELAY_FEE_BPS = 100;
+
   /*///////////////////////////////////////////////////////////////
                              STRUCTS 
   //////////////////////////////////////////////////////////////*/
@@ -119,7 +121,7 @@ contract IntegrationUtils is Test {
       revert MerkleProofGenerationFailed();
     }
 
-    string[] memory _inputs = new string[](12);
+    string[] memory _inputs = new string[](13);
     _inputs[0] = vm.toString(_params.existingValue);
     _inputs[1] = vm.toString(_params.label);
     _inputs[2] = vm.toString(_params.existingNullifier);
@@ -132,6 +134,7 @@ contract IntegrationUtils is Test {
     _inputs[9] = vm.toString(_shadowMerkleTree.depth);
     _inputs[10] = vm.toString(_aspMerkleProof);
     _inputs[11] = vm.toString(_shadowASPMerkleTree.depth);
+    _inputs[12] = vm.toString(_params.withdrawnValue - ((_params.withdrawnValue * _TEST_RELAY_FEE_BPS) / 10_000));
 
     // Call the ProofGenerator script using node
     string[] memory _scriptArgs = new string[](2);

@@ -65,6 +65,7 @@ async function main() {
     stateTreeDepth,
     aspMerkleProofHex,
     aspTreeDepth,
+    bridgedValue,
   ] = process.argv.slice(2);
 
   try {
@@ -103,6 +104,7 @@ async function main() {
 
     const { proof, publicSignals } = await silentProveWithdrawal(commitment, {
       context,
+      bridgedValue,
       withdrawnValue,
       stateMerkleProof: {
         root: stateMerkleProof[0],
@@ -133,8 +135,7 @@ async function main() {
         [BigInt(proof.pi_b[1][1]), BigInt(proof.pi_b[1][0])],
       ],
       _pC: [BigInt(proof.pi_c[0]), BigInt(proof.pi_c[1])],
-      // Mode-3 withdrawL1 emits 9 public signals (adds newCommitmentHashL2 /
-      // C_dest at index 1); on-chain ProofLib.WithdrawProof.pubSignals is uint256[9].
+      // Mode-3 withdrawL1 emits 10 public signals, including the net bridged value.
       _pubSignals: [
         publicSignals[0],
         publicSignals[1],
@@ -145,6 +146,7 @@ async function main() {
         publicSignals[6],
         publicSignals[7],
         publicSignals[8],
+        publicSignals[9],
       ].map((x) => BigInt(x)),
     };
 
@@ -156,7 +158,7 @@ async function main() {
             { name: "_pA", type: "uint256[2]" },
             { name: "_pB", type: "uint256[2][2]" },
             { name: "_pC", type: "uint256[2]" },
-            { name: "_pubSignals", type: "uint256[9]" },
+            { name: "_pubSignals", type: "uint256[10]" },
           ],
         },
       ],

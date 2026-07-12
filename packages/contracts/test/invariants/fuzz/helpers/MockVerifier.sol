@@ -25,7 +25,7 @@ contract MockVerifier is IVerifier {
     uint256[2] calldata,
     uint256[2][2] calldata,
     uint256[2] calldata,
-    uint256[8] calldata
+    uint256[10] calldata
   ) public view returns (bool) {
     return validProof;
   }

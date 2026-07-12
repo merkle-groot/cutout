@@ -69,7 +69,7 @@ const withdrawalPayload = {
     protocol: "groth16",
     curve: "bn128",
   },
-  publicSignals: ["0", "0", "0", "0", "0", "0", "0", "0", "0"],
+  publicSignals: ["0", "0", "0", "0", "0", "0", "0", "0", "0", "0"],
   chainId: 31337,
   scope: "0",
 };

@@ -39,7 +39,7 @@ describe("End-to-end Mode-3 flow", () => {
       file: "withdrawL1",
       template: "WithdrawL1",
       params: [maxTreeDepth],
-      pubs: ["withdrawnValue", "stateRoot", "stateTreeDepth", "ASPRoot", "ASPTreeDepth", "context"],
+      pubs: ["withdrawnValue", "stateRoot", "stateTreeDepth", "ASPRoot", "ASPTreeDepth", "context", "bridgedValue"],
     });
     withdrawL2 = await circomkit.WitnessTester("withdrawL2", {
       file: "withdrawL2",
@@ -82,7 +82,8 @@ describe("End-to-end Mode-3 flow", () => {
 
     await withdrawL1.expectPass(
       {
-        withdrawnValue,
+      withdrawnValue,
+      bridgedValue: withdrawnValue,
         stateRoot: stateProof.root,
         stateTreeDepth: stateTree.depth,
         ASPRoot: ASPProof.root,

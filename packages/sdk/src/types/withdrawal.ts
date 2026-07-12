@@ -79,6 +79,8 @@ export interface WithdrawL1ProofInput {
   readonly context: bigint;
   /** Bridged value; equals the spent note value for a full withdrawal. */
   readonly withdrawnValue: bigint;
+  /** Net value delivered to the destination L2 after the relay fee. */
+  readonly bridgedValue?: bigint;
   readonly stateMerkleProof: LeanIMTMerkleProof<bigint>;
   readonly aspMerkleProof: LeanIMTMerkleProof<bigint>;
   readonly stateRoot: Hash;
@@ -125,6 +127,7 @@ export const WITHDRAW_L1_SIGNALS = {
   aspRoot: 6,
   aspTreeDepth: 7,
   context: 8,
+  bridgedValue: 9,
 } as const;
 
 /**

@@ -178,6 +178,7 @@ export class WithdrawalService {
     return {
       // Public signals
       withdrawnValue: input.withdrawnValue,
+      bridgedValue: input.bridgedValue ?? input.withdrawnValue,
       stateRoot: input.stateRoot,
       stateTreeDepth: input.stateTreeDepth,
       ASPRoot: input.aspRoot,

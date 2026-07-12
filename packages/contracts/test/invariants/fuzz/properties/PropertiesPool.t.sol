@@ -29,7 +29,7 @@ contract PropertiesPool is HandlersParent {
 
     // Action
     (bool success, bytes memory result) = currentActor().call(
-      address(entrypoint), 0, abi.encodeCall(entrypoint.relay, (_withdrawal, _proof, tokenPool.SCOPE()))
+      address(tokenPool), 0, abi.encodeCall(tokenPool.relay, (_withdrawal, _proof))
     );
 
     // Postconditions
@@ -76,7 +76,7 @@ contract PropertiesPool is HandlersParent {
 
     // Action
     (bool success, bytes memory result) = currentActor().call(
-      address(entrypoint), 0, abi.encodeCall(entrypoint.relay, (_withdrawal, _proof, tokenPool.SCOPE()))
+      address(tokenPool), 0, abi.encodeCall(tokenPool.relay, (_withdrawal, _proof))
     );
 
     // Post-condition

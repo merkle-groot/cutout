@@ -83,6 +83,7 @@ export function parseSignals(
     ASPRoot: BigInt(signals[6]!), // [6]
     ASPTreeDepth: BigInt(signals[7]!), // [7]
     context: BigInt(signals[8]!), // [8]
+    bridgedValue: BigInt(signals[9]!), // [9] net L2 delivery value
   };
 }
 

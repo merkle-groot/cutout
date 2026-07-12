@@ -34,7 +34,7 @@ async function main() {
     file: "withdrawL1",
     template: "WithdrawL1",
     params: [32],
-    pubs: ["withdrawnValue", "stateRoot", "stateTreeDepth", "ASPRoot", "ASPTreeDepth", "context"],
+    pubs: ["withdrawnValue", "stateRoot", "stateTreeDepth", "ASPRoot", "ASPTreeDepth", "context", "bridgedValue"],
   });
 
   // artifacts output at `build/withdrawL2` directory

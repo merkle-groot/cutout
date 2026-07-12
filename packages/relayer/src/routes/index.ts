@@ -3,6 +3,7 @@ import {
   relayerDetailsHandler,
   relayQuoteHandler,
   relayRequestHandler,
+  testnetAspProofHandler,
 } from "../handlers/index.js";
 import {
   validateDetailsMiddleware,
@@ -27,6 +28,8 @@ relayerRouter.post("/quote", [
   validateQuoteMiddleware,
   relayQuoteHandler
 ]);
+
+relayerRouter.get("/asp/proof/:label", (req, res, next) => { void testnetAspProofHandler(req, res).catch(next); });
 
 
 export { relayerRouter };

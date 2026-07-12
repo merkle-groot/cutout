@@ -62,7 +62,7 @@ vi.mock("../../src/services/index.js", () => ({
 }));
 
 // REAL utils (not mocked) — this is the point of the file.
-import { encodeWithdrawalData } from "../../src/utils.js";
+import { decodeWithdrawalData, encodeWithdrawalData } from "../../src/utils.js";
 import { PrivacyPoolRelayer } from "../../src/services/privacyPoolRelayer.service.js";
 import { WithdrawalPayload } from "../../src/interfaces/relayer/request.js";
 
@@ -94,9 +94,11 @@ function relayData(overrides: {
   });
 }
 
-/** withdrawL1 public signals (9): [3]=withdrawnValue, [8]=context. */
-function signals(withdrawnValue: string, context = CONTEXT_DEC): string[] {
-  return ["0", "0", "0", withdrawnValue, "0", "0", "0", "0", context];
+/** withdrawL1 public signals (10): [3]=withdrawnValue, [8]=context, [9]=bridgedValue. */
+function signals(withdrawnValue: string, context = CONTEXT_DEC, relayFeeBPS = 1000n): string[] {
+  const gross = BigInt(withdrawnValue);
+  const bridged = gross - ((gross * relayFeeBPS) / 10_000n);
+  return ["0", "0", "0", withdrawnValue, "0", "0", "0", "0", context, bridged.toString()];
 }
 
 function payload(over: {
@@ -106,10 +108,12 @@ function payload(over: {
   scope?: bigint;
   feeCommitment?: WithdrawalPayload["feeCommitment"];
 }): WithdrawalPayload {
+  const data = over.data ?? relayData();
+  const { relayFeeBPS } = decodeWithdrawalData(data);
   return {
     withdrawal: {
       chainId: over.chainId ?? DEST_CHAIN,
-      data: over.data ?? relayData(),
+      data,
     },
     proof: {
       proof: {
@@ -122,7 +126,7 @@ function payload(over: {
         protocol: "groth16",
         curve: "bn128",
       } as unknown as Groth16Proof,
-      publicSignals: over.publicSignals ?? signals("5000"),
+      publicSignals: over.publicSignals ?? signals("5000", CONTEXT_DEC, relayFeeBPS),
     },
     scope: over.scope ?? 0n,
     feeCommitment: over.feeCommitment,
@@ -223,7 +227,7 @@ describe("PrivacyPoolRelayer (Mode-3, real service)", () => {
     expect(h.sdk.broadcastWithdrawal).not.toHaveBeenCalled();
   });
 
-  it("uses the real 9-signal layout: value at [3], context at [8]", async () => {
+  it("uses the real 10-signal layout: value at [3], context at [8], bridged value at [9]", async () => {
     // A value at the OLD index [2] must NOT be read as withdrawnValue: put a
     // large number at [2] but a below-min value at [3] and expect rejection.
     const s = signals("100");

@@ -20,6 +20,10 @@ const L2_PROOF_LIB = resolve(
   here,
   "../../../contracts/src/contracts/lib/L2ProofLib.sol",
 );
+const L1_PROOF_LIB = resolve(
+  here,
+  "../../../contracts/src/contracts/lib/ProofLib.sol",
+);
 
 /** Extract `pubSignals[N]` returned by a named accessor in L2ProofLib.sol. */
 function solidityIndexFor(source: string, accessor: string): number {
@@ -62,5 +66,13 @@ describe("withdrawL2 public-signal order (regression: L2ProofLib parity)", () =>
     expect(WITHDRAW_L1_SIGNALS.newCommitmentHashL2).toBe(1);
     expect(WITHDRAW_L1_SIGNALS.existingNullifierHash).toBe(2);
     expect(WITHDRAW_L1_SIGNALS.context).toBe(8);
+    expect(WITHDRAW_L1_SIGNALS.bridgedValue).toBe(9);
+  });
+
+  it("withdrawL1 bridged value matches the on-chain accessor", () => {
+    const source = readFileSync(L1_PROOF_LIB, "utf8");
+    expect(WITHDRAW_L1_SIGNALS.bridgedValue).toBe(
+      solidityIndexFor(source, "bridgedValue"),
+    );
   });
 });

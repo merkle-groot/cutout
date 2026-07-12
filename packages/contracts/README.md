@@ -182,6 +182,24 @@ The project provides deployment scripts for various networks. Choose the appropr
 yarn deploy:protocol:sepolia --broadcast
 ```
 
+**OP Sepolia destination pool:**
+
+Copy `.env.testnet.example` to `.env`, set `L2_TARGET=OP_SEPOLIA`, fill the deployed L1 pool and
+the target-specific `OP_SEPOLIA_*` messenger/bridge addresses, then run this from the contracts package:
+
+```bash
+yarn deploy:l2:op-sepolia --broadcast
+```
+
+Set `OP_SEPOLIA_L2_POOL_ADDRESS` to the emitted destination pool address and configure the L1 bridge:
+
+```bash
+yarn configure:bridge:op-sepolia --broadcast
+```
+
+The bridge configuration is native-ETH only. ERC20 mode needs a second configuration with the
+remote L2 token and the corresponding L1 token bridge parameters.
+
 **Gnosis Chiado:**
 ```bash
 yarn deploy:protocol:chiado --broadcast
