@@ -8,9 +8,9 @@ const quoteSchema: JSONSchemaType<QuotetBody> = {
   type: "object",
   properties: {
     chainId: { type: ["string", "number"] },
-    amount: { type: ["string"] },
-    asset: { type: ["string"] },
-    recipient: { type: ["string"], nullable: true },
+    amount: { type: ["string"], pattern: "^[0-9]+$" },
+    asset: { type: ["string"], pattern: "^0x[0-9a-fA-F]{40}$" },
+    recipient: { type: ["string"], nullable: true, pattern: "^0x[0-9a-fA-F]{40}$" },
     extraGas: { type: "boolean" }
   },
   required: ["chainId", "amount", "asset"],

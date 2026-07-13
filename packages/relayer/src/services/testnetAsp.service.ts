@@ -1,6 +1,6 @@
 import { LeanIMT } from "@zk-kit/lean-imt";
 import { poseidon } from "maci-crypto/build/ts/hashing.js";
-import { parseAbiItem } from "viem";
+import { keccak256, parseAbiItem, stringToHex } from "viem";
 import { CONFIG } from "../config/index.js";
 import { web3Provider } from "../providers/index.js";
 
@@ -13,7 +13,13 @@ const entrypointAbi = [{
   type: "function", name: "updateRoot", stateMutability: "nonpayable", inputs: [
     { name: "_root", type: "uint256" }, { name: "_ipfsCID", type: "string" },
   ], outputs: [{ type: "uint256" }],
+}, {
+  type: "function", name: "hasRole", stateMutability: "view", inputs: [
+    { name: "role", type: "bytes32" }, { name: "account", type: "address" },
+  ], outputs: [{ type: "bool" }],
 }] as const;
+
+const aspPostmanRole = keccak256(stringToHex("ASP_POSTMAN"));
 
 export type AspProof = { root: string; depth: number; proof: { index: number; siblings: string[]; root: string } };
 
@@ -55,12 +61,44 @@ export class TestnetAspService {
     const tree = new LeanIMT((left, right) => poseidon([left, right]));
     tree.insertMany(labels);
     this.trees.set(chainId, tree);
-    const currentRoot = await web3Provider.client(chainId).readContract({ address: chain.entrypoint_address, abi: entrypointAbi, functionName: "latestRoot" });
+    // A newly deployed Entrypoint has no ASP association set yet. In that
+    // state latestRoot() intentionally reverts, so treat it as an empty root
+    // and publish the first testnet root below.
+    let currentRoot: bigint | undefined;
+    try {
+      currentRoot = await web3Provider.client(chainId).readContract({
+        address: chain.entrypoint_address,
+        abi: entrypointAbi,
+        functionName: "latestRoot",
+      });
+    } catch (error) {
+      console.warn(`[testnet-asp] no existing ASP root on chain ${chainId}; publishing the first root`);
+    }
     if (currentRoot === tree.root) return;
     const cid = process.env.TESTNET_ASP_IPFS_CID ?? "testnet-asp-root-all-labels-placeholder";
-    const hash = await web3Provider.signer(chainId).writeContract({ chain: web3Provider.chains[chainId]!, account: web3Provider.signers[chainId]!.account!, address: chain.entrypoint_address, abi: entrypointAbi, functionName: "updateRoot", args: [tree.root, cid] });
-    await web3Provider.client(chainId).waitForTransactionReceipt({ hash });
-    console.log(`[testnet-asp] updated chain ${chainId} root to ${tree.root} (${labels.length} labels), tx ${hash}`);
+    const signer = web3Provider.signers[chainId]!.account!;
+    const balance = await web3Provider.client(chainId).getBalance({ address: signer.address });
+    if (balance === 0n) {
+      console.error(`[testnet-asp] cannot publish chain ${chainId} root: signer ${signer.address} has zero native balance`);
+      return;
+    }
+    const authorized = await web3Provider.client(chainId).readContract({
+      address: chain.entrypoint_address,
+      abi: entrypointAbi,
+      functionName: "hasRole",
+      args: [aspPostmanRole, signer.address],
+    });
+    if (!authorized) {
+      console.error(`[testnet-asp] cannot publish chain ${chainId} root: signer ${signer.address} lacks ASP_POSTMAN role`);
+      return;
+    }
+    try {
+      const hash = await web3Provider.signer(chainId).writeContract({ chain: web3Provider.chains[chainId]!, account: signer, address: chain.entrypoint_address, abi: entrypointAbi, functionName: "updateRoot", args: [tree.root, cid] });
+      await web3Provider.client(chainId).waitForTransactionReceipt({ hash });
+      console.log(`[testnet-asp] updated chain ${chainId} root to ${tree.root} (${labels.length} labels), tx ${hash}`);
+    } catch (error) {
+      console.error(`[testnet-asp] failed to publish chain ${chainId} root:`, error instanceof Error ? error.message : error);
+    }
   }
 
   async proof(chainId: number, label: bigint): Promise<AspProof> {

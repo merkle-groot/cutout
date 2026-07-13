@@ -28,7 +28,7 @@ import {IEntrypoint} from 'interfaces/IEntrypoint.sol';
 import {IPrivacyPool} from 'interfaces/IPrivacyPool.sol';
 import {IL1CrossDomainMessenger, IL1StandardBridge} from 'interfaces/external/IOptimismAdapter.sol';
 import {IInbox, IL1GatewayRouter} from 'interfaces/external/IArbitrumBridge.sol';
-import {IStarkgateBridge, IStarknetMessaging} from 'interfaces/external/IStarknetBridge.sol';
+import {IStarkgateBridge, IStarkgateEthBridge, IStarknetMessaging} from 'interfaces/external/IStarknetBridge.sol';
 import {IL2Pool} from 'interfaces/IL2Pool.sol';
 
 import {State} from './State.sol';
@@ -382,9 +382,12 @@ contract PrivacyPool is State, ReentrancyGuard, IPrivacyPool {
     );
 
     // Move the tokens through StarkGate. For native, the bridged ETH rides in `msg.value`.
+    // NOTE: the native path MUST use the ETH bridge's token-less `deposit` overload. StarkGate
+    // identifies ETH with its own sentinel (`0x...455448`), not `Constants.NATIVE_ASSET`
+    // (`0xEeee...EEeE`), so passing `ASSET` to the 3-arg form reverts with `TOKEN_NOT_SERVICED`.
     if (IS_NATIVE) {
-      IStarkgateBridge(_config.l1TokenBridge).deposit{value: _value + _config.tokenFee}(
-        ASSET, _value, _config.l2PoolFelt
+      IStarkgateEthBridge(_config.l1TokenBridge).deposit{value: _value + _config.tokenFee}(
+        _value, _config.l2PoolFelt
       );
     } else {
       IERC20(ASSET).forceApprove(_config.l1TokenBridge, _value);

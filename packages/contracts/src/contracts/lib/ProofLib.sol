@@ -28,6 +28,8 @@ library ProofLib {
    *        - [7] ASPTreeDepth: Current depth of the ASP tree
    *        - [8] context: Context value for the withdrawal operation
    *        - [9] bridgedValue: Net value delivered to L2 after the relay fee
+   * NOTE: the public signal order is the three circuit outputs first, followed by
+   * the `public[...]` inputs in the generated circuit's order.
    */
   struct WithdrawProof {
     uint256[2] pA;

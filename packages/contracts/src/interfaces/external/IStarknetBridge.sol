@@ -32,11 +32,24 @@ interface IStarknetMessaging {
 interface IStarkgateBridge {
   /**
    * @notice Deposit `amount` of `token` to `l2Recipient` on Starknet via StarkGate.
-   * @dev For the native asset the StarkGate ETH bridge takes the bridged value as part of
-   *      `msg.value`; the ETH message fee is charged on top.
+   * @dev ERC20 path only. StarkGate identifies the native asset with its own sentinel
+   *      (`0x...455448`), NOT this repo's `Constants.NATIVE_ASSET` (`0xEeee...EEeE`) — passing the
+   *      latter reverts with `TOKEN_NOT_SERVICED`. Use {IStarkgateEthBridge} for native instead.
    * @param token L1 token address
    * @param amount Token amount to bridge
    * @param l2Recipient Destination Starknet address (felt252)
    */
   function deposit(address token, uint256 amount, uint256 l2Recipient) external payable;
+}
+
+interface IStarkgateEthBridge {
+  /**
+   * @notice Deposit `amount` of native ETH to `l2Recipient` on Starknet via the StarkGate ETH bridge.
+   * @dev The token-less overload exposed by `StarkWare_StarknetEthBridge_2.0`. The bridged value and
+   *      the L1->L2 message fee both ride in `msg.value` (`msg.value == amount + fee`). This avoids
+   *      the token-sentinel mismatch described in {IStarkgateBridge.deposit}.
+   * @param amount ETH amount to bridge
+   * @param l2Recipient Destination Starknet address (felt252)
+   */
+  function deposit(uint256 amount, uint256 l2Recipient) external payable;
 }

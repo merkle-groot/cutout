@@ -109,6 +109,12 @@ describe("ContractInteractionsService", () => {
   });
 
   it("should deposit ERC20 successfully", async () => {
+    mockPublicClient.readContract.mockResolvedValue([
+      mockPoolAddress,
+      0n,
+      0n,
+      0n,
+    ]);
     mockPublicClient.simulateContract.mockResolvedValue({
       request: "mockRequest",
     });
@@ -124,6 +130,12 @@ describe("ContractInteractionsService", () => {
   });
 
   it("should fail to deposit ERC20", async () => {
+    mockPublicClient.readContract.mockResolvedValue([
+      mockPoolAddress,
+      0n,
+      0n,
+      0n,
+    ]);
     mockPublicClient.simulateContract.mockRejectedValue(
       new Error("Deposit failed"),
     );
@@ -134,6 +146,12 @@ describe("ContractInteractionsService", () => {
   });
 
   it("should deposit ETH successfully", async () => {
+    mockPublicClient.readContract.mockResolvedValue([
+      mockPoolAddress,
+      0n,
+      0n,
+      0n,
+    ]);
     mockPublicClient.simulateContract.mockResolvedValue({
       request: "mockRequest",
     });

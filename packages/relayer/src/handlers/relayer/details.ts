@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import { DetailsMarshall } from "../../types.js";
 import { getAddress } from "viem/utils";
 import { Address } from "viem/accounts";
-import { CONFIG, getAssetConfig, getChainConfig } from "../../config/index.js";
+import { getAssetConfig, getChainConfig, getFeeReceiverAddress } from "../../config/index.js";
 import { ValidationError } from "../../exceptions/base.exception.js";
 
 /**
@@ -42,7 +42,7 @@ export function relayerDetailsHandler(
   const chainConfig = getChainConfig(chainId);
 
   // Get fee receiver address for this chain
-  const feeReceiverAddress = chainConfig.fee_receiver_address || CONFIG.defaults.fee_receiver_address;
+  const feeReceiverAddress = getFeeReceiverAddress(chainId);
 
   // Get asset configuration  
   const assetConfig = getAssetConfig(chainId, normalizedAssetAddress);

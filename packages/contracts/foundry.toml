@@ -16,6 +16,19 @@ bytecode_hash = "none"
 cbor_metadata = false
 fs_permissions = [{ access = "read-write", path = "./deployments/" }]
 
+[profile.sepolia]
+solc_version = '0.8.28'
+libs = ['../../node_modules', 'node_modules', 'lib']
+optimizer_runs = 10_000
+bytecode_hash = "none"
+cbor_metadata = false
+fs_permissions = [{ access = "read-write", path = "./deployments/" }]
+# Already-deployed Poseidon libraries on Sepolia (see broadcast/Deploy.s.sol/11155111)
+libraries = [
+  "../../node_modules/poseidon-solidity/PoseidonT3.sol:PoseidonT3:0x8ffdA7Ed8B4aD98C2C34f54B76821711F4a6f2C5",
+  "../../node_modules/poseidon-solidity/PoseidonT4.sol:PoseidonT4:0xe393dd7287Db9982e6f845824854Baf8b8e823AF",
+]
+
 [profile.optimized]
 via_ir = true
 out = 'out-via-ir'

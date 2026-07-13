@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0
-// forgefmt: disable-start
 /*
     Copyright 2021 0KIMS association.
 
@@ -38,46 +37,46 @@ contract WithdrawalVerifier {
     uint256 constant gammax2 = 10857046999023057135944570762232829481370756359578518086990519993285655852781;
     uint256 constant gammay1 = 4082367875863433681332203403145435568316851327593401208105741076214120093531;
     uint256 constant gammay2 = 8495653923123431417604973247489272438418190587263600148770280649306958101930;
-    uint256 constant deltax1 = 11921274516261074653366140029287521835748521521359016197880743603990714194978;
-    uint256 constant deltax2 = 14833658294650940129679262394452556696627270172985979028571494282267512062895;
-    uint256 constant deltay1 = 4838981663946999444461030925896278724878076230735975084322320696055626235786;
-    uint256 constant deltay2 = 15200833710533466770419978677528291222253166561371072245276345085382060950806;
+    uint256 constant deltax1 = 4223782144537060658780825888110338158394676774625681469573975533907832381448;
+    uint256 constant deltax2 = 2378756449807016766002179372433756762655010004188782094009446954906499648961;
+    uint256 constant deltay1 = 622211062104766445321599837076143937444899244831456098575172952378013701814;
+    uint256 constant deltay2 = 16788945832754565866807400411285911887061270239335136997473108141155470631420;
 
-
+    
     uint256 constant IC0x = 8068092184254006900017560104373408023254161049993016565864138177645384140795;
     uint256 constant IC0y = 1521296988044841032362086000529207749461650077272175596271748876997541128394;
-
+    
     uint256 constant IC1x = 6650627553001855129657012658796673436820788718349965636852253449119524966433;
     uint256 constant IC1y = 5929741024446695177237871225168619589973320872904412142229049302644844352708;
-
+    
     uint256 constant IC2x = 15754025956984378005050989612389722491073072054874543125817185548255176680358;
     uint256 constant IC2y = 316373476671672946348470993273084760565583360604779936809253427443779595173;
-
+    
     uint256 constant IC3x = 14767668796170253750358700721094403289424008184893822339591888300643185735346;
     uint256 constant IC3y = 11457979896139242691977275597906357602360600859883547507545665033550557192997;
-
+    
     uint256 constant IC4x = 2396849771754879231960220056288396989114107563622070657886409156313459639057;
     uint256 constant IC4y = 18337463093408566489532967384996839817485820811948537479884951648461972856543;
-
+    
     uint256 constant IC5x = 7367060292865613769414368025761468857334973436867869589836268134548069420109;
     uint256 constant IC5y = 4672252304992557726936109683271929890227181111552868569644910862824192073930;
-
+    
     uint256 constant IC6x = 5968363385409534265543268410300170150325275625105755788958786999326875735430;
     uint256 constant IC6y = 18164350985118631847129239226916462722946094307199097537617590648360378693210;
-
+    
     uint256 constant IC7x = 18107637048765418208191324728251010989178606354093819179909989123724935462045;
     uint256 constant IC7y = 114943895724173551107820263359426161495782777718321719892537869223146889571;
-
+    
     uint256 constant IC8x = 17136111393744975478428797988653533990987198865992738905356964332001433029971;
     uint256 constant IC8y = 1478783174309181881650804748418765810329125259322272597597015753573129123781;
-
+    
     uint256 constant IC9x = 13395905354709206320826871599155940037906790041561265983015390609326313218743;
     uint256 constant IC9y = 4264914373577323779357214947799536326765828162365794807794321104425656864594;
-
+    
     uint256 constant IC10x = 6332342448918241046344851148349191313435759879330296941303203222334483424573;
     uint256 constant IC10y = 14770432123623434457668549924538983296223784472543836760765062771581346983687;
-
-
+    
+ 
     // Memory data
     uint16 constant pVk = 0;
     uint16 constant pPairing = 128;
@@ -92,7 +91,7 @@ contract WithdrawalVerifier {
                     return(0, 0x20)
                 }
             }
-
+            
             // G1 function to multiply a G1 value(x,y) to value in an address
             function g1_mulAccC(pR, x, y, s) {
                 let success
@@ -127,27 +126,27 @@ contract WithdrawalVerifier {
                 mstore(add(_pVk, 32), IC0y)
 
                 // Compute the linear combination vk_x
-
+                
                 g1_mulAccC(_pVk, IC1x, IC1y, calldataload(add(pubSignals, 0)))
-
+                
                 g1_mulAccC(_pVk, IC2x, IC2y, calldataload(add(pubSignals, 32)))
-
+                
                 g1_mulAccC(_pVk, IC3x, IC3y, calldataload(add(pubSignals, 64)))
-
+                
                 g1_mulAccC(_pVk, IC4x, IC4y, calldataload(add(pubSignals, 96)))
-
+                
                 g1_mulAccC(_pVk, IC5x, IC5y, calldataload(add(pubSignals, 128)))
-
+                
                 g1_mulAccC(_pVk, IC6x, IC6y, calldataload(add(pubSignals, 160)))
-
+                
                 g1_mulAccC(_pVk, IC7x, IC7y, calldataload(add(pubSignals, 192)))
-
+                
                 g1_mulAccC(_pVk, IC8x, IC8y, calldataload(add(pubSignals, 224)))
-
+                
                 g1_mulAccC(_pVk, IC9x, IC9y, calldataload(add(pubSignals, 256)))
-
+                
                 g1_mulAccC(_pVk, IC10x, IC10y, calldataload(add(pubSignals, 288)))
-
+                
 
                 // -A
                 mstore(_pPairing, calldataload(pA))
@@ -200,27 +199,27 @@ contract WithdrawalVerifier {
             mstore(0x40, add(pMem, pLastMem))
 
             // Validate that all evaluations ∈ F
-
+            
             checkField(calldataload(add(_pubSignals, 0)))
-
+            
             checkField(calldataload(add(_pubSignals, 32)))
-
+            
             checkField(calldataload(add(_pubSignals, 64)))
-
+            
             checkField(calldataload(add(_pubSignals, 96)))
-
+            
             checkField(calldataload(add(_pubSignals, 128)))
-
+            
             checkField(calldataload(add(_pubSignals, 160)))
-
+            
             checkField(calldataload(add(_pubSignals, 192)))
-
+            
             checkField(calldataload(add(_pubSignals, 224)))
-
+            
             checkField(calldataload(add(_pubSignals, 256)))
-
+            
             checkField(calldataload(add(_pubSignals, 288)))
-
+            
 
             // Validate all evaluations
             let isValid := checkPairing(_pA, _pB, _pC, _pubSignals, pMem)
@@ -230,5 +229,3 @@ contract WithdrawalVerifier {
          }
      }
  }
-
-// forgefmt: disable-end

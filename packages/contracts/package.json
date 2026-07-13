@@ -30,7 +30,10 @@
     "test:symbolic": "echo 'update this yarn script when symbolic testing is implemented'",
     "test:unit": "forge test --match-contract Unit -vvv",
     "test:unit:deep": "FOUNDRY_FUZZ_RUNS=5000 yarn test:unit",
-    "updateroot:sepolia": "bash -c 'source .env && forge script script/Entrypoint.s.sol:UpdateRoot --ffi --account $SEPOLIA_POSTMAN --rpc-url $SEPOLIA_RPC -vv $0'"
+    "updateroot:sepolia": "bash -c 'source .env && forge script script/Entrypoint.s.sol:UpdateRoot --ffi --account $SEPOLIA_POSTMAN --rpc-url $SEPOLIA_RPC -vv $0'",
+    "update:l1:root:sepolia": "bash -c 'source .env && forge script script/UpdateL1.s.sol:UpdateL1Root --account $SEPOLIA_POSTMAN --rpc-url $ETHEREUM_SEPOLIA_RPC --sender $POSTMAN_ADDRESS --slow -vv $0'",
+    "update:l1:pool:sepolia": "bash -c 'source .env && forge script script/UpdateL1.s.sol:UpdateL1PoolConfiguration --account DEPLOYER --rpc-url $ETHEREUM_SEPOLIA_RPC --sender $OWNER_ADDRESS --slow -vv $0'",
+    "bridge:funds:op-sepolia": "bash -c 'source .env && forge script script/BridgeFunds.s.sol:BridgeFundsToOpStack --account DEPLOYER --rpc-url $ETHEREUM_SEPOLIA_RPC --sender $DEPLOYER_ADDRESS --slow -vv $0'"
   },
   "lint-staged": {
     "*.{js,css,md,ts,sol}": "forge fmt",

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { privateKeyToAccount } from "viem/accounts";
 import { ConfigError, RelayerError } from "../exceptions/base.exception.js";
 import { zConfig } from "./schemas.js";
 import { AssetConfig, ChainConfig } from "./types.js";
@@ -50,11 +51,11 @@ export function getChainConfig(chainId: number): ChainConfig {
   }
 
   // Log warnings for implicit defaults
-  if (!chainConfig.fee_receiver_address && CONFIG.defaults.fee_receiver_address) {
+  if (!chainConfig.fee_receiver_address && !process.env.RELAYER_FEE_RECEIVER_ADDRESS && CONFIG.defaults.fee_receiver_address.toLowerCase() !== "0x0000000000000000000000000000000000000000") {
     console.warn(`[CONFIG WARNING] Using default fee_receiver_address for chain ${chainId}`);
   }
 
-  if (!chainConfig.signer_private_key && CONFIG.defaults.signer_private_key) {
+  if (!chainConfig.signer_private_key && !process.env.RELAYER_PRIVATE_KEY && !process.env.RELAYER_SIGNER_PRIVATE_KEY && CONFIG.defaults.signer_private_key) {
     console.warn(`[CONFIG WARNING] Using default signer_private_key for chain ${chainId}`);
   }
 
@@ -78,7 +79,11 @@ export function getChainConfig(chainId: number): ChainConfig {
  */
 export function getFeeReceiverAddress(chainId: number): string {
   const chainConfig = getChainConfig(chainId);
-  return chainConfig.fee_receiver_address || CONFIG.defaults.fee_receiver_address;
+  const configured = process.env.RELAYER_FEE_RECEIVER_ADDRESS || chainConfig.fee_receiver_address || CONFIG.defaults.fee_receiver_address;
+  if (configured.toLowerCase() !== "0x0000000000000000000000000000000000000000") return configured;
+  // A zero fee receiver cannot be encoded into a valid withdrawal. For the
+  // testnet fallback, pay fees to the signer that broadcasts relay txs.
+  return privateKeyToAccount(getSignerPrivateKey(chainId) as `0x${string}`).address;
 }
 
 /**
@@ -90,7 +95,8 @@ export function getFeeReceiverAddress(chainId: number): string {
  */
 export function getSignerPrivateKey(chainId: number): string {
   const chainConfig = getChainConfig(chainId);
-  return chainConfig.signer_private_key || CONFIG.defaults.signer_private_key;
+  const environmentKey = process.env.RELAYER_PRIVATE_KEY || process.env.RELAYER_SIGNER_PRIVATE_KEY;
+  return environmentKey || chainConfig.signer_private_key || CONFIG.defaults.signer_private_key;
 }
 
 /**

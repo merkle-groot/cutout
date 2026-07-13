@@ -328,3 +328,65 @@ export function calculateRelayContext(
     ) % SNARK_SCALAR_FIELD;
   return numberToHex(hash);
 }
+
+/**
+ * Left-fold of the 2-input BN254 Poseidon over a list of field elements.
+ *
+ * The counterpart of `poseidon_fold` in the Starknet pool (`packages/starknet-pool/src/hashing.cairo`).
+ * Garaga exposes only a 2-input Poseidon on Starknet, so the Cairo side derives `context`/`scope` as
+ * this fold; the SDK must mirror it exactly. Output is a BN254 field element (no mod-p reduction).
+ *
+ * @param inputs At least two field elements.
+ */
+export function poseidonFold(inputs: bigint[]): bigint {
+  if (inputs.length < 2) throw new Error("poseidonFold: need >= 2 inputs");
+  let acc = poseidon([inputs[0], inputs[1]]);
+  for (let i = 2; i < inputs.length; i++) {
+    acc = poseidon([acc, inputs[i]]);
+  }
+  return acc;
+}
+
+/**
+ * The Starknet-pool `scope`, mirroring `StarknetPrivacyPool`'s constructor:
+ * `PoseidonBN254([poolAddress, chainId, asset])`. All inputs are Starknet felts (< 2**251 < F).
+ */
+export function deriveScopeStarknet(
+  poolAddress: bigint,
+  chainId: bigint,
+  asset: bigint,
+): bigint {
+  return poseidonFold([poolAddress, chainId, asset]);
+}
+
+/**
+ * A flattened Starknet withdrawal request — the counterpart of the Cairo `Withdrawal` struct.
+ * All addresses are Starknet felts.
+ */
+export interface StarknetWithdrawal {
+  processooor: bigint;
+  recipient: bigint;
+  feeRecipient: bigint;
+  relayFeeBPS: bigint;
+}
+
+/**
+ * The Starknet L2-spend `context`, mirroring `StarknetPrivacyPool._compute_context`:
+ * `PoseidonBN254([processooor, recipient, feeRecipient, relayFeeBPS, scope])`.
+ *
+ * Unlike {@link calculateContext} (EVM keccak/abi.encode), this is a Poseidon fold: the `withdrawL2`
+ * circuit treats `context` as opaque, so the derivation is a pool<->SDK convention, and Poseidon is
+ * far cheaper to reproduce in Cairo than Solidity ABI-encoding. Returns a BN254 field element.
+ */
+export function calculateContextStarknet(
+  withdrawal: StarknetWithdrawal,
+  scope: bigint,
+): bigint {
+  return poseidonFold([
+    withdrawal.processooor,
+    withdrawal.recipient,
+    withdrawal.feeRecipient,
+    withdrawal.relayFeeBPS,
+    scope,
+  ]);
+}

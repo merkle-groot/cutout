@@ -3,6 +3,8 @@ import cors from "cors";
 import express from "express";
 import { fileURLToPath } from "node:url";
 import { createPublicClient, http } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { Account, RpcProvider } from "starknet";
 import { LeanIMT } from "@zk-kit/lean-imt";
 import { poseidon } from "maci-crypto/build/ts/hashing.js";
 import { Circuits, DataService, PrivacyPoolSDK } from "@0xbow/privacy-pools-core-sdk";
@@ -18,6 +20,29 @@ let sdk;
 function getSdk() {
   if (!sdk) sdk = new PrivacyPoolSDK(new Circuits({ browser: false }));
   return sdk;
+}
+
+const starknetU256 = (value) => {
+  const number = BigInt(value);
+  const mask = (1n << 128n) - 1n;
+  return [number & mask, number >> 128n].map((part) => part.toString());
+};
+
+function getStarknetConfig() {
+  return {
+    rpcUrl: process.env.STARKNET_RPC_URL ?? "",
+    chainId: process.env.STARKNET_CHAIN_ID ?? "393402133025997798000961",
+    chainName: process.env.STARKNET_CHAIN_NAME ?? "Starknet Sepolia",
+    poolAddress: process.env.STARKNET_POOL_ADDRESS ?? "",
+    assetAddress: process.env.STARKNET_ASSET_ADDRESS ?? "",
+    relayerAddress: process.env.STARKNET_RELAYER_ADDRESS ?? "",
+    privateKey: process.env.STARKNET_RELAYER_PRIVATE_KEY ?? "",
+  };
+}
+
+function getStarknetProvider(config) {
+  if (!config.rpcUrl) throw new Error("STARKNET_RPC_URL is not configured");
+  return new RpcProvider({ nodeUrl: config.rpcUrl });
 }
 
 app.get("/api/health", (_req, res) => {
@@ -64,7 +89,7 @@ app.post("/api/relayer/request", async (req, res) => {
 });
 
 app.get("/api/config", (_req, res) => {
-  res.json({
+  const config = {
     chainId: Number(process.env.CHAIN_ID ?? 1),
     chainName: process.env.CHAIN_NAME ?? "Ethereum mainnet",
     rpcUrl: process.env.PUBLIC_RPC_URL ?? "",
@@ -76,7 +101,40 @@ app.get("/api/config", (_req, res) => {
     minDepositWei: process.env.MIN_DEPOSIT_WEI ?? "0",
     maxDepositWei: ((1n << 128n) - 1n).toString(),
     vettingFeeBps: Number(process.env.VETTING_FEE_BPS ?? 0),
-  });
+  };
+
+  const entrypointAddress = process.env.ENTRYPOINT_ADDRESS;
+  if (!config.rpcUrl || !entrypointAddress || !config.asset) return res.json(config);
+
+  void (async () => {
+    try {
+      const client = createPublicClient({ transport: http(config.rpcUrl) });
+      const result = await client.readContract({
+        address: entrypointAddress,
+        abi: [{
+          type: "function",
+          name: "assetConfig",
+          stateMutability: "view",
+          inputs: [{ name: "asset", type: "address" }],
+          outputs: [
+            { name: "pool", type: "address" },
+            { name: "minimumDepositAmount", type: "uint256" },
+            { name: "vettingFeeBPS", type: "uint256" },
+            { name: "maxRelayFeeBPS", type: "uint256" },
+          ],
+        }],
+        functionName: "assetConfig",
+        args: [config.asset],
+      });
+      config.minDepositWei = result[1].toString();
+      config.vettingFeeBps = Number(result[2]);
+      config.maxRelayFeeBps = Number(result[3]);
+      return res.json(config);
+    } catch (error) {
+      console.warn("[CONFIG WARNING] Could not read live asset configuration:", error instanceof Error ? error.message : error);
+      return res.json(config);
+    }
+  })();
 });
 
 app.get("/api/activity", async (_req, res) => {
@@ -163,23 +221,44 @@ app.get("/api/mode3/index", async (_req, res) => {
     const startBlock = BigInt(process.env.DEPLOYMENT_BLOCK ?? "0");
     const l2StartBlock = BigInt(process.env.L2_DEPLOYMENT_BLOCK ?? "0");
     const l1Data = new DataService([{ chainId: l1ChainId, privacyPoolAddress: l1Pool, startBlock, rpcUrl: l1Rpc }]);
-    const l2Data = new DataService([{ chainId: l2ChainId, privacyPoolAddress: l2Pool, startBlock: l2StartBlock, rpcUrl: l2Rpc }]);
+    // Infura rate-limits concurrent eth_getLogs calls. Keep the L2 indexer
+    // deliberately serialized because this endpoint is used interactively,
+    // not as a high-throughput event processor.
+    const l2Data = new DataService(
+      [{ chainId: l2ChainId, privacyPoolAddress: l2Pool, startBlock: l2StartBlock, rpcUrl: l2Rpc }],
+      new Map([[l2ChainId, { concurrency: 1, chunkDelayMs: 250, retryBaseDelayMs: 2000 }]]),
+    );
     const l1 = { chainId: l1ChainId, address: l1Pool, scope: 0n, deploymentBlock: startBlock };
     const l2 = { chainId: l2ChainId, address: l2Pool, scope: 0n, deploymentBlock: l2StartBlock };
-    const [deliveries, received, activated] = await Promise.all([
-      l1Data.getL2Notes(l1),
-      l2Data.getL2NotesReceived(l2),
-      l2Data.getL2NotesActivated(l2),
-    ]);
+    const deliveries = await l1Data.getL2Notes(l1);
+    const received = await l2Data.getL2NotesReceived(l2);
+    const activated = await l2Data.getL2NotesActivated(l2);
+    const scope = await createPublicClient({ transport: http(l2Rpc) }).readContract({ address: l2Pool, abi: [{ type: "function", name: "SCOPE", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] }], functionName: "SCOPE" });
     const candidates = l1Data.buildScannableNotes(deliveries, received);
     const tree = l2Data.reconstructL2StateTree(activated);
+    const stateRoot = tree.root ?? 0n;
     const proofs = activated.map((event) => {
       const index = tree.indexOf(event.commitment);
-      return { commitment: event.commitment.toString(), index, proof: index >= 0 ? tree.generateProof(index) : null };
+      return { commitment: event.commitment.toString(), index, depth: tree.depth, proof: index >= 0 ? tree.generateProof(index) : null };
     });
-    return res.json({ configured: true, stateRoot: tree.root.toString(), candidates: candidates.map((note) => ({ ...note, commitment: note.commitment.toString(), value: note.value.toString(), ephemeralKey: note.ephemeralKey.map((part) => part.toString()) })), proofs: JSON.parse(JSON.stringify(proofs, (_key, value) => typeof value === "bigint" ? value.toString() : value)) });
+    return res.json({ configured: true, scope: scope.toString(), stateRoot: stateRoot.toString(), candidates: candidates.map((note) => ({ ...note, commitment: note.commitment.toString(), value: note.value.toString(), ephemeralKey: note.ephemeralKey.map((part) => part.toString()) })), proofs: JSON.parse(JSON.stringify(proofs, (_key, value) => typeof value === "bigint" ? value.toString() : value)) });
   } catch (error) {
+    console.warn("[MODE3 INDEX ERROR]", error instanceof Error ? error.stack : error);
     return res.status(502).json({ configured: true, error: error instanceof Error ? error.message : "Unable to index Mode-3 notes", candidates: [], proofs: [] });
+  }
+});
+
+app.get("/api/l2/config", async (_req, res) => {
+  const rpcUrl = process.env.L2_RPC_URL;
+  const poolAddress = process.env.L2_POOL_ADDRESS;
+  const privateKey = process.env.L2_RELAYER_PRIVATE_KEY;
+  if (!rpcUrl || !poolAddress) return res.status(503).json({ error: "L2 pool is not configured" });
+  try {
+    const client = createPublicClient({ transport: http(rpcUrl) });
+    const scope = await client.readContract({ address: poolAddress, abi: [{ type: "function", name: "SCOPE", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] }], functionName: "SCOPE" });
+    return res.json({ configured: Boolean(privateKey), chainId: Number(process.env.L2_CHAIN_ID ?? 10), chainName: process.env.L2_CHAIN_NAME ?? "Configured L2", poolAddress, scope: scope.toString(), relayerAddress: privateKey ? privateKeyToAccount(privateKey).address : null });
+  } catch (error) {
+    return res.status(502).json({ error: error instanceof Error ? error.message : "Unable to read L2 configuration" });
   }
 });
 
@@ -210,11 +289,10 @@ app.post("/api/l2/activate", async (req, res) => {
   const rpcUrl = process.env.L2_RPC_URL;
   const poolAddress = process.env.L2_POOL_ADDRESS;
   const privateKey = process.env.L2_RELAYER_PRIVATE_KEY;
-  const entrypoint = process.env.L2_ENTRYPOINT_ADDRESS ?? process.env.ENTRYPOINT_ADDRESS;
-  if (!rpcUrl || !poolAddress || !privateKey || !entrypoint) return res.status(503).json({ error: "L2 activation is not configured" });
+  if (!rpcUrl || !poolAddress || !privateKey) return res.status(503).json({ error: "L2 activation is not configured" });
   try {
     const chain = { id: Number(process.env.L2_CHAIN_ID ?? 10), name: process.env.L2_CHAIN_NAME ?? "Configured L2", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: [rpcUrl] } } };
-    const interactions = getSdk().createContractInstance(rpcUrl, chain, entrypoint, privateKey);
+    const interactions = getSdk().createContractInstance(rpcUrl, chain, poolAddress, privateKey);
     const transaction = await interactions.activateNote(poolAddress, BigInt(req.body.commitment));
     return res.json({ hash: transaction.hash });
   } catch (error) {
@@ -226,15 +304,84 @@ app.post("/api/l2/withdraw", async (req, res) => {
   const rpcUrl = process.env.L2_RPC_URL;
   const poolAddress = process.env.L2_POOL_ADDRESS;
   const privateKey = process.env.L2_RELAYER_PRIVATE_KEY;
-  const entrypoint = process.env.L2_ENTRYPOINT_ADDRESS ?? process.env.ENTRYPOINT_ADDRESS;
-  if (!rpcUrl || !poolAddress || !privateKey || !entrypoint) return res.status(503).json({ error: "L2 withdrawal is not configured" });
+  if (!rpcUrl || !poolAddress || !privateKey) return res.status(503).json({ error: "L2 withdrawal is not configured" });
   try {
     const chain = { id: Number(process.env.L2_CHAIN_ID ?? 10), name: process.env.L2_CHAIN_NAME ?? "Configured L2", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: [rpcUrl] } } };
-    const interactions = getSdk().createContractInstance(rpcUrl, chain, entrypoint, privateKey);
+    const interactions = getSdk().createContractInstance(rpcUrl, chain, poolAddress, privateKey);
     const transaction = await interactions.withdrawL2(poolAddress, req.body.withdrawal, req.body.proof);
     return res.json({ hash: transaction.hash });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "L2 withdrawal failed" });
+  }
+});
+
+app.get("/api/starknet/config", async (_req, res) => {
+  const config = getStarknetConfig();
+  if (!config.rpcUrl || !config.poolAddress) return res.status(503).json({ error: "Starknet destination is not configured" });
+  return res.json({
+    configured: Boolean(config.privateKey && config.relayerAddress),
+    chainId: config.chainId,
+    chainName: config.chainName,
+    poolAddress: config.poolAddress,
+    assetAddress: config.assetAddress,
+    relayerAddress: config.relayerAddress || null,
+  });
+});
+
+app.get("/api/starknet/status/:commitment", async (req, res) => {
+  const config = getStarknetConfig();
+  if (!config.rpcUrl || !config.poolAddress) return res.status(503).json({ error: "Starknet destination is not configured" });
+  try {
+    const provider = getStarknetProvider(config);
+    const [pendingLow, pendingHigh] = await provider.callContract({
+      contractAddress: config.poolAddress,
+      entrypoint: "pending_value",
+      calldata: starknetU256(req.params.commitment),
+    });
+    const pendingValue = BigInt(pendingLow) + (BigInt(pendingHigh) << 128n);
+    const [rootLow, rootHigh] = await provider.callContract({ contractAddress: config.poolAddress, entrypoint: "current_root", calldata: [] });
+    const [scopeLow, scopeHigh] = await provider.callContract({ contractAddress: config.poolAddress, entrypoint: "scope", calldata: [] });
+    const root = BigInt(rootLow) + (BigInt(rootHigh) << 128n);
+    const scope = BigInt(scopeLow) + (BigInt(scopeHigh) << 128n);
+    return res.json({ received: pendingValue > 0n, pendingValue: pendingValue.toString(), currentRoot: root.toString(), scope: scope.toString(), state: pendingValue > 0n ? "received-pending-activation" : "bridge-pending" });
+  } catch (error) {
+    return res.status(502).json({ error: error instanceof Error ? error.message : "Unable to read Starknet status" });
+  }
+});
+
+app.post("/api/starknet/activate", async (req, res) => {
+  const config = getStarknetConfig();
+  if (!config.rpcUrl || !config.poolAddress || !config.privateKey || !config.relayerAddress) return res.status(503).json({ error: "Starknet relayer is not configured" });
+  try {
+    const provider = getStarknetProvider(config);
+    const account = new Account(provider, config.relayerAddress, config.privateKey);
+    const response = await account.execute({ contractAddress: config.poolAddress, entrypoint: "activate_note", calldata: starknetU256(req.body.commitment) });
+    return res.json({ hash: response.transaction_hash });
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Starknet activation failed" });
+  }
+});
+
+app.post("/api/starknet/withdraw", async (req, res) => {
+  const config = getStarknetConfig();
+  if (!config.rpcUrl || !config.poolAddress || !config.privateKey || !config.relayerAddress) return res.status(503).json({ error: "Starknet relayer is not configured" });
+  const { withdrawal, proofCalldata } = req.body ?? {};
+  if (!withdrawal || !Array.isArray(proofCalldata) || !proofCalldata.length) return res.status(400).json({ error: "withdrawal and Garaga proofCalldata are required" });
+  try {
+    const provider = getStarknetProvider(config);
+    const account = new Account(provider, config.relayerAddress, config.privateKey);
+    const calldata = [
+      withdrawal.processooor,
+      withdrawal.recipient,
+      withdrawal.feeRecipient,
+      ...starknetU256(withdrawal.relayFeeBPS ?? 0),
+      proofCalldata.length.toString(),
+      ...proofCalldata.map(String),
+    ];
+    const response = await account.execute({ contractAddress: config.poolAddress, entrypoint: "withdraw", calldata });
+    return res.json({ hash: response.transaction_hash });
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Starknet withdrawal failed" });
   }
 });
 
