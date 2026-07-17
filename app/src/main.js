@@ -1,5 +1,5 @@
 import "./style.css";
-import { createPublicClient, createWalletClient, custom, decodeAbiParameters, formatEther, http, isAddress, parseEther } from "viem";
+import { createPublicClient, createWalletClient, custom, decodeAbiParameters, formatEther, http, isAddress, parseEther, parseEventLogs } from "viem";
 import {
   IDENTITY_UNWRAP_MESSAGE,
   createMnemonic,
@@ -49,7 +49,20 @@ const REGISTRY_ABI = [
   { type: "function", name: "registerKeys", stateMutability: "nonpayable", inputs: [{ name: "schemeId", type: "uint256" }, { name: "stealthMetaAddress", type: "bytes" }], outputs: [] },
   { type: "function", name: "stealthMetaAddressOf", stateMutability: "view", inputs: [{ name: "registrant", type: "address" }, { name: "schemeId", type: "uint256" }], outputs: [{ type: "bytes" }] },
 ];
-const poolAbi = [{ type: "function", name: "deposit", stateMutability: "payable", inputs: [{ name: "precommitment", type: "uint256" }], outputs: [] }];
+const poolAbi = [
+  { type: "function", name: "deposit", stateMutability: "payable", inputs: [{ name: "precommitment", type: "uint256" }], outputs: [] },
+  {
+    type: "event",
+    name: "Deposited",
+    inputs: [
+      { name: "_depositor", type: "address", indexed: true },
+      { name: "_commitment", type: "uint256", indexed: false },
+      { name: "_label", type: "uint256", indexed: false },
+      { name: "_value", type: "uint256", indexed: false },
+      { name: "_precommitmentHash", type: "uint256", indexed: false },
+    ],
+  },
+];
 
 const state = {
   /** Which flow occupies the left workspace: "home" | "deposit" | "send" | "receive". */
@@ -1546,7 +1559,7 @@ async function runDeposit() {
   const receipt = await client.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") throw new Error("Deposit transaction reverted.");
 
-  const event = await reconcileDeposit(hash);
+  const event = depositEventFromReceipt(receipt, config.poolAddress, precommitment);
   state.notes = [...state.notes, {
     index: index.toString(),
     commitment: event.commitment,
@@ -1561,14 +1574,24 @@ async function runDeposit() {
   navigateVault("home", { replace: true, capture: false, clearMessages: false });
 }
 
-async function reconcileDeposit(hash) {
-  for (let attempt = 0; attempt < 15; attempt += 1) {
-    const response = await fetch(`/api/deposits/${hash}`);
-    if (response.ok) return (await response.json()).event;
-    if (response.status !== 202) throw new Error("Deposit confirmed, but event reconciliation failed.");
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+function depositEventFromReceipt(receipt, poolAddress, precommitment) {
+  const [event] = parseEventLogs({
+    abi: poolAbi,
+    eventName: "Deposited",
+    logs: receipt.logs.filter((log) => log.address.toLowerCase() === poolAddress.toLowerCase()),
+    strict: true,
+  });
+  if (!event) {
+    throw new Error("Deposit confirmed, but its pool event could not be decoded.");
   }
-  throw new Error("Deposit confirmed, but the pool event is still indexing.");
+  if (event.args._precommitmentHash !== precommitment) {
+    throw new Error("Deposit confirmed with an unexpected pool event.");
+  }
+  return {
+    commitment: event.args._commitment.toString(),
+    label: event.args._label.toString(),
+    value: event.args._value.toString(),
+  };
 }
 
 async function runSend() {
