@@ -484,20 +484,53 @@ function flowHead(eyebrow, title, sub) {
   return `<div class="flow-head"><div><span class="eyebrow">${eyebrow}</span><h2>${title}</h2><p>${sub}</p></div><button class="ghost" data-view="home">← HOME</button></div>`;
 }
 
-function miniFlowNode(icon, title, detail, tone = "") {
-  return `<div class="mini-flow-node ${tone}"><span>${escapeHtml(icon)}</span><div><b>${escapeHtml(title)}</b><small>${escapeHtml(detail)}</small></div></div>`;
+function actionRoute(path, color, delay = 0) {
+  return `<path class="action-route route-${color}" d="${path}" /><path class="action-route-motion" style="animation-delay:${delay}s" d="${path}" />`;
 }
 
-function zigzagPath(extra = "") {
-  return `<div class="mini-flow-path ${extra}" aria-hidden="true"><svg viewBox="0 0 160 44" preserveAspectRatio="none"><polyline class="flow-trace" points="0,22 20,8 40,34 60,10 80,32 100,8 120,34 140,12 160,22" /></svg></div>`;
+function actionFlowNode(node, x, y, side) {
+  const textX = side === "left" ? x - 38 : x + 38;
+  const anchor = side === "left" ? "end" : "start";
+  return `<g class="action-flow-node">
+    <circle class="action-node-badge route-${node.color}" cx="${x}" cy="${y}" r="24" />
+    <text class="action-node-icon" x="${x}" y="${y + 1}">${escapeHtml(node.icon)}</text>
+    <text class="action-node-title" x="${textX}" y="${y - 3}" text-anchor="${anchor}">${escapeHtml(node.title)}</text>
+    <text class="action-node-detail" x="${textX}" y="${y + 19}" text-anchor="${anchor}">${escapeHtml(node.detail)}</text>
+  </g>`;
+}
+
+function actionFlowDiagram({ ariaLabel, source, targets, interchange = false, inactive = false }) {
+  const count = Math.max(targets.length, 1);
+  const height = Math.max(150, 46 + count * 82);
+  const centerY = height / 2;
+  const topY = count === 1 ? centerY : 48;
+  const step = count === 1 ? 0 : (height - 96) / (count - 1);
+  const targetLayout = targets.map((target, index) => ({ target, y: topY + index * step }));
+  const commonRoute = interchange ? actionRoute(`M 172 ${centerY} L 335 ${centerY}`, "teal") : "";
+  const routes = targetLayout.map(({ target, y }, index) => {
+    const path = interchange
+      ? `M 335 ${centerY} C 405 ${centerY}, 425 ${y}, 498 ${y}`
+      : `M 172 ${centerY} C 285 ${centerY}, 385 ${y}, 498 ${y}`;
+    return actionRoute(path, target.color, index * -0.2);
+  }).join("");
+  const nodes = targetLayout.map(({ target, y }) => actionFlowNode(target, 522, y, "right")).join("");
+
+  return `<div class="action-flow-diagram ${inactive ? "flow-inactive" : ""}">
+    <svg viewBox="0 0 720 ${height}" role="img" aria-label="${escapeHtml(ariaLabel)}">
+      ${commonRoute}${routes}
+      ${actionFlowNode(source, 148, centerY, "left")}
+      ${nodes || `<text class="action-flow-empty" x="522" y="${centerY}">NO DESTINATIONS</text>`}
+      ${interchange ? `<image class="action-interchange" href="/f5-eye.svg" x="306" y="${centerY - 29}" width="58" height="58" /><text class="action-interchange-label" x="335" y="${centerY + 49}">F5</text>` : ""}
+    </svg>
+  </div>`;
 }
 
 function depositFlowDiagram() {
-  return `<div class="mini-flow-diagram" aria-label="Funds move from your wallet into the Ethereum privacy pool">
-    ${miniFlowNode("YOU", "YOUR WALLET", "PUBLIC FUNDS", "user-node")}
-    ${zigzagPath()}
-    ${miniFlowNode("Ξ", "ETHEREUM POOL", "SHIELDED NOTE", "pool-node")}
-  </div>`;
+  return actionFlowDiagram({
+    ariaLabel: "Funds move from your wallet into the Ethereum privacy pool",
+    source: { icon: "YOU", title: "YOUR WALLET", detail: "PUBLIC FUNDS", color: "pink" },
+    targets: [{ icon: "Ξ", title: "ETHEREUM POOL", detail: "SHIELDED NOTE", color: "teal" }],
+  });
 }
 
 function bridgeTargets() {
@@ -507,40 +540,36 @@ function bridgeTargets() {
 }
 
 function bridgeFlowDiagram(send) {
-  const targets = bridgeTargets();
+  const routeColors = ["blue", "pink", "yellow", "teal"];
+  const targets = bridgeTargets().map((target, index) => ({ ...target, color: routeColors[index % routeColors.length] }));
   const selected = send.destinationChosen ? targets.find((target) => target.id === send.destinationChainId) : null;
   if (selected) {
-    return `<div class="mini-flow-diagram bridge-selected" aria-label="Note bridges from Ethereum to ${escapeHtml(selected.label)}">
-      ${miniFlowNode("Ξ", "ETHEREUM POOL", "L1 NOTE", "pool-node")}
-      ${zigzagPath("selected-path")}
-      ${miniFlowNode(chainInitials(selected.label), selected.label, "SHIELDED NOTE", "destination-node")}
-    </div>`;
+    return actionFlowDiagram({
+      ariaLabel: `Note bridges from Ethereum to ${selected.label}`,
+      source: { icon: "Ξ", title: "ETHEREUM POOL", detail: "L1 NOTE", color: "teal" },
+      targets: [{ icon: chainInitials(selected.label), title: selected.label, detail: "SHIELDED NOTE", color: selected.color }],
+      interchange: true,
+    });
   }
-
-  const height = Math.max(82, targets.length * 58);
-  const paths = targets.map((_target, index) => {
-    const y = ((index + 0.5) * height) / Math.max(targets.length, 1);
-    const middle = height / 2;
-    const points = `0,${middle} 22,${middle - 8} 44,${middle + 8} 66,${middle} 92,${(middle + y) / 2 - 7} 118,${(middle + y) / 2 + 7} 140,${y - 7} 160,${y}`;
-    return `<polyline class="flow-trace" style="animation-delay:${index * -0.25}s" points="${points}" />`;
-  }).join("");
-  return `<div class="mini-flow-diagram bridge-fan" aria-label="Ethereum note can bridge to any configured destination">
-    ${miniFlowNode("Ξ", "ETHEREUM POOL", "CHOOSE A BRIDGE", "pool-node")}
-    <div class="mini-flow-fan" style="height:${height}px" aria-hidden="true"><svg viewBox="0 0 160 ${height}" preserveAspectRatio="none">${paths}</svg></div>
-    <div class="mini-flow-targets">${targets.length
-      ? targets.map((target) => miniFlowNode(chainInitials(target.label), target.label, "DESTINATION", "destination-node")).join("")
-      : miniFlowNode("?", "NO BRIDGES", "NOT CONFIGURED", "empty-node")}</div>
-  </div>`;
+  return actionFlowDiagram({
+    ariaLabel: "Ethereum note can bridge to any configured destination",
+    source: { icon: "Ξ", title: "ETHEREUM POOL", detail: "CHOOSE A BRIDGE", color: "teal" },
+    targets: targets.length
+      ? targets.map((target) => ({ icon: chainInitials(target.label), title: target.label, detail: "DESTINATION", color: target.color }))
+      : [{ icon: "?", title: "NO BRIDGES", detail: "NOT CONFIGURED", color: "muted" }],
+    interchange: true,
+  });
 }
 
 function withdrawFlowDiagram(note) {
   const label = note ? chainLabel(note.chain) : "SELECT A NOTE";
   const detail = note ? `${formatEther(note.value)} ETH` : "FROM THE VAULT";
-  return `<div class="mini-flow-diagram ${note ? "" : "flow-inactive"}" aria-label="Selected note withdraws to your account">
-    ${miniFlowNode(note ? chainInitials(label) : "?", label, detail, "note-node")}
-    ${zigzagPath()}
-    ${miniFlowNode("YOU", "YOUR ACCOUNT", "FINAL RECIPIENT", "user-node")}
-  </div>`;
+  return actionFlowDiagram({
+    ariaLabel: "Selected note withdraws to your account",
+    source: { icon: note ? chainInitials(label) : "?", title: label, detail, color: "yellow" },
+    targets: [{ icon: "YOU", title: "YOUR ACCOUNT", detail: "FINAL RECIPIENT", color: "pink" }],
+    inactive: !note,
+  });
 }
 
 function chainInitials(label) {
