@@ -14,7 +14,8 @@ import {
 } from "@0xbow/privacy-pools-core-sdk";
 import { Address } from "viem";
 import {
-  CONFIG
+  CONFIG,
+  getSignerPrivateKey
 } from "../config/index.js";
 import { WithdrawalPayload } from "../interfaces/relayer/request.js";
 import { RelayerError, SdkError, ConfigError } from "../exceptions/base.exception.js";
@@ -46,7 +47,10 @@ export class SdkProvider implements SdkProviderInterface {
         
         // Get entrypoint address and signer private key
         const entrypointAddress = chainConfig.entrypoint_address || CONFIG.defaults.entrypoint_address;
-        const signerPrivateKey = chainConfig.signer_private_key || CONFIG.defaults.signer_private_key;
+        // Resolve through the shared helper, not the config directly: it also honours
+        // RELAYER_PRIVATE_KEY. Reading the config here meant this SDK instance and web3Provider's
+        // signer could silently be two DIFFERENT accounts whenever the env override was set.
+        const signerPrivateKey = getSignerPrivateKey(chainConfig.chain_id) as `0x${string}`;
         
         // Create contract instance
         const contracts = this.sdk.createContractInstance(

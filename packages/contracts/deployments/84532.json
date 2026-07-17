@@ -1,18 +1,18 @@
 {
-  "chainId": 11155420,
+  "chainId": 84532,
   "contracts": [
     {
       "name": "L2WithdrawalVerifier",
-      "address": "0x319413d62896b35C94EF344B2ca298e8F7fa91aA",
+      "address": "0x8A84d7eCd2d435ddAe13522eEed387bF13a22CB0",
       "deployer": "0x0eB4d30c3AeA7Beb5ce17c1533cefE755EC807e2",
-      "deploymentBlock": 46219109
+      "deploymentBlock": 44247229
     },
     {
       "name": "L2PrivacyPool",
-      "address": "0x002f4910DDFA5d081c3612fc88d8AF9F92Cd97A2",
+      "address": "0xeEEd6485A583D197F2F5805AdE7Ec6ECBcDA833D",
       "deployer": "0x0eB4d30c3AeA7Beb5ce17c1533cefE755EC807e2",
-      "deploymentBlock": 46219109,
-      "scope": 2779217028024980199887951214317595398435931925920130599911527056472364507972,
+      "deploymentBlock": 44247229,
+      "scope": 6937649730319446991097963138643863544897999528211588443099348244634994490531,
       "asset": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
       "l1Pool": "0xf913AB5e2b0dD32ba2ff4969962919834f954c10"
     }

@@ -13,6 +13,34 @@ import {
 import { AccountCommitment, Commitment } from "../index.js";
 
 /**
+ * The circuits' `maxTreeDepth`.
+ *
+ * Single source of truth is `packages/circuits/circuits.json`
+ * (`withdrawL1.params = [32]`, `withdrawL2.params = [32]`), mirrored on-chain by
+ * `State.sol: MAX_TREE_DEPTH = 32`. This copy is pinned to both by
+ * `test/unit/treeDepth.spec.ts`, which reads them off disk — do not edit it by hand.
+ */
+export const MAX_TREE_DEPTH = 32;
+
+/**
+ * Pad a Merkle proof's siblings out to the circuit's fixed array length.
+ *
+ * `signal input stateSiblings[maxTreeDepth]` is a FIXED-size array, so snarkjs demands exactly
+ * `maxTreeDepth` values and otherwise fails with "Not enough values for input signal
+ * stateSiblings". A real proof is only as deep as the tree currently is (a 2-leaf tree yields one
+ * sibling), so the tail must be zero-filled; the separate `stateTreeDepth` / `ASPTreeDepth` signal
+ * tells the circuit how many entries are real.
+ *
+ * Mirrors `packages/circuits/scripts/e2e/lib.mjs: padSiblings`, which every working e2e reference
+ * (`relay.mjs`, `l2withdraw.mjs`, `sn-l2withdraw.mjs`) applies before proving.
+ */
+function padSiblings(siblings: readonly bigint[], depth = MAX_TREE_DEPTH): bigint[] {
+  const padded = siblings.map(BigInt);
+  while (padded.length < depth) padded.push(0n);
+  return padded;
+}
+
+/**
  * Service responsible for handling Mode-3 withdrawal proof generation.
  *
  * A Cutout withdrawal has two proven legs (CLAUDE.md §5–6):
@@ -202,10 +230,11 @@ export class WithdrawalService {
       newNullifier: input.newNullifier,
       newSecret: input.newSecret,
 
-      // Merkle proofs
-      stateSiblings: input.stateMerkleProof.siblings,
+      // Merkle proofs — zero-padded to the circuit's fixed array length; the *TreeDepth signals
+      // above tell the circuit how many entries are real.
+      stateSiblings: padSiblings(input.stateMerkleProof.siblings),
       stateIndex: BigInt(input.stateMerkleProof.index),
-      ASPSiblings: input.aspMerkleProof.siblings,
+      ASPSiblings: padSiblings(input.aspMerkleProof.siblings),
       ASPIndex: BigInt(input.aspMerkleProof.index),
     };
   }
@@ -227,8 +256,8 @@ export class WithdrawalService {
       stealthPrivateKey: input.stealthPrivateKey,
       sharedSecretX: input.sharedSecretX,
 
-      // Merkle proof
-      stateSiblings: input.stateMerkleProof.siblings,
+      // Merkle proof — zero-padded to the circuit's fixed array length (see padSiblings).
+      stateSiblings: padSiblings(input.stateMerkleProof.siblings),
       stateIndex: BigInt(input.stateMerkleProof.index),
     };
   }
