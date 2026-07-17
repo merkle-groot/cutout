@@ -282,7 +282,7 @@ function renderLanding() {
     </header>
     <main class="landing">
       <section class="hero"><div class="hero-copy"><span class="sticker teal hero-sticker">★ THE HIGHEST CATEGORY ★</span><h1>BLOW AWAY<br>YOUR <span>TRAIL</span></h1><p>F5 is an independent relayer node. We broadcast your withdrawal and pay the gas, so your fresh wallet stays fresh and nothing on-chain points back at you.</p><div class="hero-actions"><a class="primary hero-primary" href="#relay">OPEN THE VAULT →</a><a class="secondary" href="#how">HOW IT WORKS</a></div><div class="node-pill"><i class="dot teal-dot"></i> NODE ONLINE</div></div><div class="hero-art"><div class="art-dots"></div><div class="trail-bars"><i class="bar blue-bar"></i><i class="bar teal-bar"></i><i class="bar yellow-bar"></i><i class="bar pink-bar"></i><i class="bar orange-bar"></i><i class="bar blue-bar short"></i><i class="bar teal-bar tiny"></i><b></b></div><span class="figure-label">FIG. 01 / CATEGORY F5</span></div></section>
-      <section id="how" class="how landing-how"><span class="eyebrow teal-text">THE SIMPLE VERSION</span><h2>THREE SPINS & YOU’RE GONE <span class="blue-text">〰</span></h2><div class="steps">${step("1", "ONE PHRASE", "Twelve words derive your note secrets, your shielded address, and your vault. It is the only thing you ever back up.", "MNEMONIC ROOT", "yellow")}${step("2", "SEND BLIND", "You pay a shielded address using only its public keys. You never learn where the recipient cashes out.", "PUBLIC KEYS ONLY", "pink")}${step("3", "SCAN & LAND", "The recipient finds the note by scanning. Nobody tells them it exists, and they can withdraw anywhere.", "UNLINKABLE", "teal")}</div></section>
+      <section id="how" class="how landing-how"><span class="eyebrow teal-text">THE SIMPLE VERSION</span><h2>THREE SPINS & YOU’RE GONE <span class="blue-text">〰</span></h2><div class="steps">${step("1", "ONE PHRASE", "Twelve words derive your note secrets, your shielded address, and your vault. It is the only thing you ever back up.", "MNEMONIC ROOT", "yellow")}${step("2", "BRIDGE BLIND", "You pay a shielded address using only its public keys. You never learn where the recipient cashes out.", "PUBLIC KEYS ONLY", "pink")}${step("3", "SCAN & LAND", "The recipient finds the note by scanning. Nobody tells them it exists, and they can withdraw anywhere.", "UNLINKABLE", "teal")}</div></section>
       <div class="ticker">NO LOGS ★ NO ADMIN KEYS ★ NON-CUSTODIAL ★ GAS PAID BY THE STORM ★ NO LOGS ★ NO ADMIN KEYS ★</div>
     </main>
     ${footer()}
@@ -368,7 +368,7 @@ function vaultDock() {
       ${balanceCard()}
       <div class="vault-actions">
         <button class="primary" data-view="deposit">DEPOSIT</button>
-        <button class="secondary-btn" data-view="send">SEND</button>
+        <button class="secondary-btn" data-view="send">BRIDGE</button>
         <button class="secondary-btn" data-view="receive">RECEIVE</button>
       </div>
       ${notesSection()}
@@ -514,7 +514,7 @@ function homeView() {
       </div>
       <div class="home-actions">
         <button class="primary" data-view="deposit">DEPOSIT →</button>
-        <button class="secondary-btn" data-view="send">SEND</button>
+        <button class="secondary-btn" data-view="send">BRIDGE</button>
         <button class="secondary-btn" data-view="receive">RECEIVE</button>
       </div>
       <p class="micro">current shielded notes only ★ spent and withdrawn history is not counted</p>
@@ -577,7 +577,7 @@ function sendView() {
 
   return `
     <section class="panel flow-panel">
-      ${flowHead("L1 · ETHEREUM", "SEND A NOTE", ready.length ? "Spend an L1 note and deliver it to a shielded address." : "No spendable L1 notes. Deposit, or hit RECOVER.")}
+      ${flowHead("L1 · ETHEREUM", "BRIDGE A NOTE", ready.length ? "Spend an L1 note, bridge its value, and deliver it to a shielded address." : "No spendable L1 notes. Deposit, or hit RECOVER.")}
       <label class="input-label">L1 NOTE TO SPEND<select id="send-note">${ready.length ? ready.map(noteOption).join("") : `<option value="">No notes</option>`}</select></label>
       <label class="input-label">BRIDGE TARGET<select id="send-chain">${evmChains().map((c) => chainOption(String(c.chainId), c.chainName)).join("")}${starknetOption()}</select></label>
       ${starknetWarning()}
@@ -595,7 +595,7 @@ function sendView() {
             : "You never hold the recipient's private keys, and you don't choose where they cash out. Only they can."}</span>
       </div>
       <button id="action" class="primary" ${ready.length && !draft?.relayed && !state.busy ? "" : "disabled"}>${action}</button>
-      <div class="micro">sender needs only (B, V)　★　self-bridge = send to your own address</div>
+      <div class="micro">sender needs only (B, V)　★　self-bridge uses your own shielded address</div>
     </section>`;
 }
 
