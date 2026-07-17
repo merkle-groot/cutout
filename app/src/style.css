@@ -135,17 +135,17 @@
 .ghost{background:transparent;border:3px solid var(--ink);padding:10px 12px;font:700 11px 'DM Mono';letter-spacing:1px;flex:none}
 .ghost:hover{background:var(--ink);color:var(--yellow)}
 .flow-panel{padding:36px}
-.action-flow-diagram{margin:0 0 30px;padding:14px;border:4px solid var(--ink);background:var(--paper);box-shadow:4px 4px 0 var(--ink);overflow-x:auto}
-.action-flow-diagram svg{display:block;width:100%;min-width:520px;height:auto}
-.action-route{fill:none;stroke:var(--route-color);stroke-width:12;stroke-linecap:round}
+.action-flow-diagram{margin:0 0 28px;padding:18px;border:5px solid var(--ink);background:var(--paper);box-shadow:7px 7px 0 var(--ink);overflow-x:auto}
+.action-flow-diagram svg{display:block;width:100%;min-width:760px;height:auto}
+.action-route{fill:none;stroke:var(--route-color);stroke-width:14;stroke-linecap:round}
 .action-route-motion{fill:none;stroke:var(--paper);stroke-width:3;stroke-linecap:round;stroke-dasharray:3 17;animation:flow-dash 1.15s linear infinite,flow-pulse 1.8s ease-in-out infinite}
 .action-node-badge{fill:var(--route-color);stroke:var(--ink);stroke-width:7}
 .action-node-icon,.action-node-title,.action-node-detail,.action-interchange-label,.action-flow-empty{fill:var(--ink);font-family:'DM Mono',monospace}
-.action-node-icon{font-size:12px;font-weight:800;text-anchor:middle;dominant-baseline:middle}
-.action-node-title{font-size:13px;font-weight:800}
-.action-node-detail{fill:#666;font-size:9px;font-weight:700}
-.action-interchange-label{font-size:11px;font-weight:800;text-anchor:middle}
-.action-flow-empty{fill:#666;font-size:11px;font-weight:700}
+.action-node-icon{font-size:14px;font-weight:800;text-anchor:middle;dominant-baseline:middle}
+.action-node-title{font-size:19px;font-weight:800}
+.action-node-detail{fill:#666;font-size:11px;font-weight:700}
+.action-interchange-label{font-size:18px;font-weight:800;text-anchor:middle}
+.action-flow-empty{fill:#666;font-size:14px;font-weight:700}
 .flow-inactive{opacity:.55}
 @keyframes flow-dash{to{stroke-dashoffset:-38}}
 @keyframes flow-pulse{0%,100%{stroke-width:3;opacity:.6}50%{stroke-width:5;opacity:1}}
@@ -220,7 +220,7 @@
   .vault-actions{grid-template-columns:1fr}
   .mnemonic-input-grid{grid-template-columns:repeat(2,1fr);padding:14px;gap:9px}
   .protection-choice{grid-template-columns:1fr}
-  .action-flow-diagram{padding:10px}
+  .action-flow-diagram{padding:12px}
   .bridge-choice{grid-template-columns:1fr}
   .map-heading{align-items:flex-start;flex-direction:column}
   .map-total{text-align:left}

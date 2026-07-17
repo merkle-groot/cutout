@@ -518,26 +518,26 @@ function actionFlowNode(node, x, y, side) {
 
 function actionFlowDiagram({ ariaLabel, source, targets, interchange = false, inactive = false }) {
   const count = Math.max(targets.length, 1);
-  const height = Math.max(150, 46 + count * 82);
+  const height = Math.max(460, 120 + count * 118);
   const centerY = height / 2;
-  const topY = count === 1 ? centerY : 48;
-  const step = count === 1 ? 0 : (height - 96) / (count - 1);
+  const topY = count === 1 ? centerY : 72;
+  const step = count === 1 ? 0 : (height - 144) / (count - 1);
   const targetLayout = targets.map((target, index) => ({ target, y: topY + index * step }));
-  const commonRoute = interchange ? actionRoute(`M 172 ${centerY} L 335 ${centerY}`, "teal") : "";
+  const commonRoute = interchange ? actionRoute(`M 270 ${centerY} L 530 ${centerY}`, "teal") : "";
   const routes = targetLayout.map(({ target, y }, index) => {
     const path = interchange
-      ? `M 335 ${centerY} C 405 ${centerY}, 425 ${y}, 498 ${y}`
-      : `M 172 ${centerY} C 285 ${centerY}, 385 ${y}, 498 ${y}`;
+      ? `M 530 ${centerY} C 615 ${centerY}, 650 ${y}, 750 ${y}`
+      : `M 270 ${centerY} C 420 ${centerY}, 620 ${y}, 750 ${y}`;
     return actionRoute(path, target.color, index * -0.2);
   }).join("");
-  const nodes = targetLayout.map(({ target, y }) => actionFlowNode(target, 522, y, "right")).join("");
+  const nodes = targetLayout.map(({ target, y }) => actionFlowNode(target, 774, y, "right")).join("");
 
   return `<div class="action-flow-diagram ${inactive ? "flow-inactive" : ""}">
-    <svg viewBox="0 0 720 ${height}" role="img" aria-label="${escapeHtml(ariaLabel)}">
+    <svg viewBox="0 0 1060 ${height}" role="img" aria-label="${escapeHtml(ariaLabel)}">
       ${commonRoute}${routes}
-      ${actionFlowNode(source, 148, centerY, "left")}
-      ${nodes || `<text class="action-flow-empty" x="522" y="${centerY}">NO DESTINATIONS</text>`}
-      ${interchange ? `<image class="action-interchange" href="/f5-eye.svg" x="306" y="${centerY - 29}" width="58" height="58" /><text class="action-interchange-label" x="335" y="${centerY + 49}">F5</text>` : ""}
+      ${actionFlowNode(source, 246, centerY, "left")}
+      ${nodes || `<text class="action-flow-empty" x="774" y="${centerY}">NO DESTINATIONS</text>`}
+      ${interchange ? `<image class="action-interchange" href="/f5-eye.svg" x="498" y="${centerY - 32}" width="64" height="64" /><text class="action-interchange-label" x="530" y="${centerY + 91}">F5</text>` : ""}
     </svg>
   </div>`;
 }
