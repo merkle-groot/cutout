@@ -602,14 +602,13 @@ function metroMap(destinations, l1Total, l1NoteCount) {
   const destinationLayout = destinations.map((destination, index) => {
     const y = topY + index * step;
     const color = routeColors[index % routeColors.length];
-    const path = `M 462 ${centerY} C 535 ${centerY}, 560 ${y}, 686 ${y}`;
+    const path = `M 462 ${centerY} C 535 ${centerY}, 580 ${y}, 733 ${y}`;
     return { destination, y, color, path };
   });
   const routes = destinationLayout.map(({ color, path }) =>
     `<path class="metro-route route-${color}" d="${path}" />`).join("");
   const destinationCards = destinationLayout.map(({ destination, y, color }) => `
     <g class="metro-destination ${destination.stateClass}">
-      <circle class="metro-station" cx="686" cy="${y}" r="20" />
       <circle class="metro-badge route-${color}" cx="733" cy="${y}" r="23" />
       <text class="metro-badge-text" x="733" y="${y + 1}">${escapeHtml(destination.initials)}</text>
       <text class="metro-chain-total" x="770" y="${y - 25}">${fmt(destination.total)} ETH TOTAL</text>

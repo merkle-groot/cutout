@@ -180,6 +180,9 @@
 .metro-chain-total,.metro-source-total{font-size:21px;font-weight:800}
 .metro-chain-name,.metro-source-name{font-size:19px;font-weight:900}
 .metro-chain-detail,.metro-source-detail{fill:#666;font-size:11px;font-weight:700}
+.metro-source-card .metro-chain-total{font-size:16px}
+.metro-source-card .metro-chain-name{font-size:17px}
+.metro-source-card .metro-chain-detail{font-size:10px}
 .metro-interchange-label{font-size:18px;font-weight:900;text-anchor:middle}
 .metro-empty{fill:#666;font-size:14px;font-weight:700}
 .metro-destination.has-pending .metro-station{fill:var(--yellow)}
