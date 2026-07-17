@@ -67,7 +67,7 @@ const state = {
   withdrawn: {},
   registered: null,
 
-  send: { noteCommitment: "", destinationChainId: "", destinationChosen: false, recipientKey: "", resolved: null, draft: null },
+  send: { noteCommitment: "", destinationChainId: "", destinationChosen: false, recipientMode: "self", recipientKey: "", resolved: null, draft: null },
   /** Starknet destination health. Bridging to a pool bound to a DIFFERENT L1 pool
    *  loses the funds: StarkGate delivers the ETH but `receive_note` reverts with
    *  NotL1Pool, so no note ever exists to claim it. Never offer it blind. */
@@ -162,12 +162,29 @@ function bind() {
   on("#action", "click", submitFlow);
   on("#dismiss-error", "click", () => { state.error = null; render(); });
   on("#amount", "input", (e) => { e.target.value = sanitizeAmount(e.target.value); state.amount = e.target.value; });
-  on("#send-chain", "change", (event) => {
+  app.querySelectorAll('input[name="send-chain"]').forEach((input) => input.addEventListener("change", (event) => {
     captureForm();
     state.send.destinationChainId = event.target.value;
     state.send.destinationChosen = Boolean(event.target.value);
     state.send.draft = null;
     render();
+  }));
+  app.querySelectorAll('input[name="send-note"]').forEach((input) => input.addEventListener("change", (event) => {
+    state.send.noteCommitment = event.target.value;
+    state.send.draft = null;
+    render();
+  }));
+  app.querySelectorAll('input[name="send-recipient-mode"]').forEach((input) => input.addEventListener("change", (event) => {
+    captureForm();
+    state.send.recipientMode = event.target.value;
+    state.send.resolved = null;
+    state.send.draft = null;
+    render();
+  }));
+  on("#send-recipient", "input", (event) => {
+    state.send.recipientKey = event.target.value;
+    state.send.resolved = null;
+    state.send.draft = null;
   });
 
   on("#create-identity", "click", startIdentitySetup);
@@ -279,7 +296,7 @@ function lockVault() {
   state.registered = null;
   state.view = "home";
   state.receive = { scanned: [], scannedCount: 0, index: {}, selected: null, recipient: "", status: null, activation: null, proof: null, withdrawal: null, response: null };
-  state.send = { noteCommitment: "", destinationChainId: "", destinationChosen: false, recipientKey: "", resolved: null, draft: null };
+  state.send = { noteCommitment: "", destinationChainId: "", destinationChosen: false, recipientMode: "self", recipientKey: "", resolved: null, draft: null };
   render();
 }
 
@@ -692,8 +709,20 @@ function sendView() {
   const draft = send.draft;
   const ready = state.notes.filter((n) => n.status !== "spent");
   const selected = pickNote();
-  const chainOption = (v, l) => `<option value="${v}" ${send.destinationChainId === v ? "selected" : ""}>${l}</option>`;
-  const noteOption = (n) => `<option value="${n.commitment}" ${selected?.commitment === n.commitment ? "selected" : ""}>${formatEther(BigInt(n.value))} ETH · ${short(n.commitment)}</option>`;
+  const recipientMode = send.recipientMode === "other" ? "other" : "self";
+  const targetOption = (value, label, disabled = false) => `<label class="bridge-option target-option ${disabled ? "is-disabled" : ""}">
+    <input type="radio" name="send-chain" value="${value}" ${send.destinationChainId === value ? "checked" : ""} ${disabled ? "disabled" : ""} />
+    <span class="bridge-option-icon">${escapeHtml(chainInitials(label))}</span>
+    <span><b>${escapeHtml(label)}</b><small>${disabled ? "UNAVAILABLE" : "BRIDGE DESTINATION"}</small></span>
+  </label>`;
+  const noteOption = (note) => `<label class="bridge-option note-option">
+    <input type="radio" name="send-note" value="${note.commitment}" ${selected?.commitment === note.commitment ? "checked" : ""} />
+    <span class="bridge-option-icon">Ξ</span>
+    <span><b>${formatEther(BigInt(note.value))} ETH</b><small>#${note.index} · ${short(note.commitment)}</small></span>
+    <span class="pill ok">READY</span>
+  </label>`;
+  const starknetUsable = state.starknet?.configured === true;
+  const recipientReady = recipientMode === "self" || Boolean(send.recipientKey.trim());
   // Proving is a long, main-thread-blocking wasm run — say so, or the button looks dead.
   const action = state.busy
     ? (draft?.proof ? "SUBMITTING RELAY…" : "PROVING… THIS CAN TAKE A MINUTE")
@@ -703,24 +732,37 @@ function sendView() {
     <section class="panel flow-panel">
       ${flowHead("L1 · ETHEREUM", "BRIDGE A NOTE", ready.length ? "Spend an L1 note, bridge its value, and deliver it to a shielded address." : "No spendable L1 notes. Deposit, or hit RECOVER.")}
       ${bridgeFlowDiagram(send)}
-      <label class="input-label">L1 NOTE TO SPEND<select id="send-note">${ready.length ? ready.map(noteOption).join("") : `<option value="">No notes</option>`}</select></label>
-      <label class="input-label">BRIDGE TARGET<select id="send-chain"><option value="" disabled ${send.destinationChainId ? "" : "selected"}>Choose a destination</option>${evmChains().map((c) => chainOption(String(c.chainId), c.chainName)).join("")}${starknetOption()}</select></label>
+      <fieldset class="bridge-choice note-choice"><legend>L1 NOTE TO SPEND</legend>
+        ${ready.length ? ready.map(noteOption).join("") : `<div class="note-empty">No spendable L1 notes.</div>`}
+      </fieldset>
+      <fieldset class="bridge-choice target-choice"><legend>BRIDGE TARGET</legend>
+        ${evmChains().map((chain) => targetOption(String(chain.chainId), chain.chainName)).join("")}
+        ${state.starknet ? targetOption(STARKNET_CHAIN_ID, "Starknet Sepolia", !starknetUsable) : ""}
+      </fieldset>
       ${starknetWarning()}
-      <label class="input-label">RECIPIENT
-        <input id="send-recipient" placeholder="0x… their address (from the registry), or paste Bx,By,Vx,Vy" value="${escapeHtml(send.recipientKey)}" />
-      </label>
-      <div class="key-actions"><button id="resolve-recipient" class="secondary-btn">RESOLVE FROM REGISTRY</button></div>
-      ${send.resolved ? `<div class="notice teal-card"><strong>RECIPIENT RESOLVED</strong><span>B ${short(send.resolved.B[0].toString())}…<br>V ${short(send.resolved.V[0].toString())}…</span></div>` : ""}
+      <fieldset class="bridge-choice recipient-choice"><legend>WHO IS RECEIVING THE NOTE?</legend>
+        <label class="bridge-option"><input type="radio" name="send-recipient-mode" value="self" ${recipientMode === "self" ? "checked" : ""} /><span><b>SELF BRIDGE</b><small>SEND TO MY SHIELDED VAULT</small></span></label>
+        <label class="bridge-option"><input type="radio" name="send-recipient-mode" value="other" ${recipientMode === "other" ? "checked" : ""} /><span><b>DIFFERENT USER</b><small>LOOK UP THEIR REGISTERED KEYS</small></span></label>
+      </fieldset>
+      ${recipientMode === "other" ? `
+        <label class="input-label">RECIPIENT L1 ADDRESS
+          <input id="send-recipient" placeholder="0x… registered Ethereum address" value="${escapeHtml(send.recipientKey)}" autocomplete="off" spellcheck="false" />
+        </label>
+        <div class="key-actions"><button id="resolve-recipient" class="secondary-btn">CHECK REGISTRY</button></div>
+        ${send.resolved ? `<div class="notice teal-card"><strong>REGISTERED RECIPIENT</strong><span>B ${short(send.resolved.B[0].toString())}…<br>V ${short(send.resolved.V[0].toString())}…</span></div>` : ""}`
+        : `<div class="notice teal-card"><strong>SELF BRIDGE</strong><span>The destination note will use the shielded address derived from this vault.</span></div>`}
       <div class="notice ${draft?.relayed ? "teal-card" : "pink-card"}">
-        <strong>${draft?.relayed ? "DELIVERED" : draft?.proof ? "PROOF READY" : "PUBLIC KEYS ONLY"}</strong>
+        <strong>${draft?.relayed ? "DELIVERED" : draft?.proof ? "PROOF READY" : recipientMode === "self" ? "YOUR SHIELDED ADDRESS" : "REGISTRY ADDRESS ONLY"}</strong>
         <span>${draft?.relayed
           ? "The note is bridging. The recipient finds it by scanning. You send them nothing, and you can close this tab."
           : draft?.proof
             ? `C_dest ${short(draft.destNote.cDest.toString())} · bridging ${formatEther(draft.bridgedValue)} ETH after the relay fee.`
-            : "You never hold the recipient's private keys, and you don't choose where they cash out. Only they can."}</span>
+            : recipientMode === "self"
+              ? "Only this vault's public shielded keys are used. Your private keys stay local."
+              : "The L1 address must have published a shielded address in the registry. Private keys are never requested."}</span>
       </div>
-      <button id="action" class="primary" ${ready.length && send.destinationChosen && !draft?.relayed && !state.busy ? "" : "disabled"}>${action}</button>
-      <div class="micro">sender needs only (B, V)　★　self-bridge uses your own shielded address</div>
+      <button id="action" class="primary" ${ready.length && send.destinationChosen && recipientReady && !draft?.relayed && !state.busy ? "" : "disabled"}>${action}</button>
+      <div class="micro">self uses this vault　★　other users must be registered on L1</div>
     </section>`;
 }
 
@@ -770,19 +812,6 @@ function errorView() {
 function noticeView() {
   if (!state.notice) return "";
   return `<div class="notice teal-card" role="status"><strong>NOTED</strong><span class="pre">${escapeHtml(state.notice)}</span></div>`;
-}
-
-/**
- * Starknet is only offered when the destination pool is actually bound to OUR L1
- * pool. Otherwise selecting it would bridge real value into a pool whose
- * `receive_note` rejects the message — the ETH lands, the note never does, and
- * nothing can claim it. A disabled option is far better than a lost deposit.
- */
-function starknetOption() {
-  const sn = state.starknet;
-  const usable = sn?.configured === true;
-  const selected = state.send.destinationChainId === STARKNET_CHAIN_ID && usable;
-  return `<option value="${STARKNET_CHAIN_ID}" ${usable ? "" : "disabled"} ${selected ? "selected" : ""}>Starknet Sepolia${usable ? "" : " (unavailable)"}</option>`;
 }
 
 function starknetWarning() {
@@ -866,8 +895,9 @@ function deriveL2Status(note, index) {
 function captureForm() {
   const read = (id) => app.querySelector(id)?.value;
   const set = (obj, key, value) => { if (value !== undefined) obj[key] = value; };
-  set(state.send, "noteCommitment", read("#send-note"));
-  set(state.send, "destinationChainId", read("#send-chain"));
+  set(state.send, "noteCommitment", app.querySelector('input[name="send-note"]:checked')?.value);
+  set(state.send, "destinationChainId", app.querySelector('input[name="send-chain"]:checked')?.value);
+  set(state.send, "recipientMode", app.querySelector('input[name="send-recipient-mode"]:checked')?.value);
   set(state.send, "recipientKey", read("#send-recipient"));
   set(state.receive, "recipient", read("#recv-recipient"));
   set(state, "unlockPassword", read("#unlock-password-input"));
@@ -1185,29 +1215,28 @@ async function registerShieldedAddress() {
   state.notice = "Shielded address published. Senders can now resolve it from your address.";
 }
 
-/** Accept either a raw `Bx,By,Vx,Vy` blob or an EOA to look up in the registry. */
+/** Resolve either this vault or another user's registered L1 address. */
 async function resolveRecipient() {
-  const input = (state.send.recipientKey ?? "").trim();
-  if (!input) throw new Error("Enter the recipient's address or their shielded keys.");
-  const { SHIELDED_SCHEME_ID, ERC6538_REGISTRY, decodeShieldedMetaAddress } = await sdk();
-
-  if (isAddress(input)) {
-    const stored = await readClient().readContract({
-      address: ERC6538_REGISTRY, abi: REGISTRY_ABI, functionName: "stealthMetaAddressOf",
-      args: [input, SHIELDED_SCHEME_ID],
-    });
-    if (!stored || stored === "0x") {
-      throw new Error("That address has not published a shielded address to the registry.");
-    }
-    state.send.resolved = decodeShieldedMetaAddress(stored);
+  captureForm();
+  if (state.send.recipientMode !== "other") {
+    if (!state.identity?.shielded) throw new Error("Unlock your vault first.");
+    const { B, V } = state.identity.shielded;
+    state.send.resolved = { B, V };
     return;
   }
 
-  const parts = input.split(",").map((p) => p.trim());
-  if (parts.length !== 4 || !parts.every((p) => /^\d+$/.test(p))) {
-    throw new Error("Paste four comma-separated field elements (Bx,By,Vx,Vy) or an 0x address to resolve.");
+  const input = (state.send.recipientKey ?? "").trim();
+  if (!input) throw new Error("Enter the recipient's registered L1 address.");
+  if (!isAddress(input)) throw new Error("Enter a valid L1 address beginning with 0x.");
+  const { SHIELDED_SCHEME_ID, ERC6538_REGISTRY, decodeShieldedMetaAddress } = await sdk();
+  const stored = await readClient().readContract({
+    address: ERC6538_REGISTRY, abi: REGISTRY_ABI, functionName: "stealthMetaAddressOf",
+    args: [input, SHIELDED_SCHEME_ID],
+  });
+  if (!stored || stored === "0x") {
+    throw new Error("That L1 address is not registered. Ask the recipient to publish their shielded address first.");
   }
-  state.send.resolved = { B: [BigInt(parts[0]), BigInt(parts[1])], V: [BigInt(parts[2]), BigInt(parts[3])] };
+  state.send.resolved = decodeShieldedMetaAddress(stored);
 }
 
 /*//////////////////////////////////////////////////////////////

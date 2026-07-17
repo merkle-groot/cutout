@@ -149,6 +149,22 @@
 .flow-inactive{opacity:.55}
 @keyframes flow-dash{to{stroke-dashoffset:-38}}
 @keyframes flow-pulse{0%,100%{stroke-width:3;opacity:.6}50%{stroke-width:5;opacity:1}}
+.bridge-choice{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0 0 26px;padding:0;border:0}
+.bridge-choice legend{grid-column:1/-1;margin-bottom:4px;font:500 13px 'DM Mono';letter-spacing:2px}
+.note-choice{grid-template-columns:1fr}
+.bridge-option{display:flex;align-items:center;gap:11px;min-width:0;border:4px solid var(--ink);padding:13px;background:var(--paper);cursor:pointer}
+.bridge-option:has(input:checked){background:var(--yellow);box-shadow:4px 4px 0 var(--ink);transform:translate(-2px,-2px)}
+.bridge-option input{flex:none;width:19px;height:19px;margin:0;accent-color:var(--ink)}
+.bridge-option>span:not(.bridge-option-icon):not(.pill){min-width:0}
+.bridge-option b,.bridge-option small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bridge-option b{font:700 12px 'DM Mono';letter-spacing:.5px}
+.bridge-option small{margin-top:5px;color:#666;font:500 9px 'DM Mono'}
+.bridge-option-icon{display:grid;place-items:center;flex:none;width:34px;height:34px;border:3px solid var(--ink);border-radius:50%;background:var(--teal);font:700 10px 'DM Mono'}
+.target-option:nth-of-type(2) .bridge-option-icon{background:var(--pink)}
+.target-option:nth-of-type(3) .bridge-option-icon{background:var(--yellow)}
+.bridge-option .pill{margin-left:auto}
+.bridge-option.is-disabled{opacity:.45;cursor:not-allowed}
+.bridge-choice .note-empty{grid-column:1/-1;margin:0}
 .home-panel{padding:44px}
 .home-panel .big-balance{margin:10px 0 0}
 .home-lead{color:#555;font:500 14px 'DM Mono';margin:12px 0 30px}
@@ -205,6 +221,7 @@
   .mnemonic-input-grid{grid-template-columns:repeat(2,1fr);padding:14px;gap:9px}
   .protection-choice{grid-template-columns:1fr}
   .action-flow-diagram{padding:10px}
+  .bridge-choice{grid-template-columns:1fr}
   .map-heading{align-items:flex-start;flex-direction:column}
   .map-total{text-align:left}
   .note-map{padding:12px}
