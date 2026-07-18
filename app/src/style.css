@@ -117,6 +117,23 @@
 .spent-toggle input{width:18px;height:18px;margin:0;accent-color:var(--ink)}
 .notes-scan-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0 2px;color:#666;font:500 10px 'DM Mono';line-height:1.4}
 .notes-scan-row .unlock{flex:none}
+.route-scan{border:3px solid var(--ink);background:var(--paper);margin:12px 0 4px}
+.route-scan-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 11px;border-bottom:3px solid var(--ink);background:var(--yellow);font:700 10px 'DM Mono';letter-spacing:.6px}
+.route-scan-list{list-style:none;margin:0;padding:0}
+.route-scan-step{display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 11px;border-bottom:2px solid var(--ink)}
+.route-scan-step:last-child{border-bottom:0}
+.route-scan-step>span:nth-child(2){min-width:0}
+.route-scan-step strong,.route-scan-step small{display:block}
+.route-scan-step strong{font:700 11px 'DM Mono'}
+.route-scan-step small{margin-top:3px;color:#666;font:10px 'DM Mono';line-height:1.35;overflow-wrap:anywhere}
+.route-scan-logo{display:grid;place-items:center;width:34px;height:34px;border:3px solid var(--ink);border-radius:50%;background:var(--route-color);color:var(--ink);font:700 10px 'DM Mono'}
+.route-scan-marker{text-align:right;font:700 9px 'DM Mono';letter-spacing:.4px}
+.route-scan-marker .spinner{width:10px;height:10px;margin-right:5px}
+.route-scan-step.is-scanning{background:#fff7cf}
+.route-scan-step.is-complete .route-scan-marker{color:#087c72}
+.route-scan-step.is-skipped{opacity:.62}
+.route-scan-step.is-error{background:#ffe0e0}
+.route-scan-step.is-error .route-scan-marker{color:#a32020}
 .group-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:20px 0 4px;border-bottom:3px solid var(--ink);padding-bottom:7px}
 .group-heading h3{margin:0;font:700 13px 'DM Mono';letter-spacing:1px}
 .vnote{display:flex;align-items:center;gap:12px;border:3px solid var(--ink);padding:12px 14px;margin-top:10px;background:var(--paper)}

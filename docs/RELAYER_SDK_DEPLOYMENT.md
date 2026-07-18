@@ -244,9 +244,10 @@ Bridge delivery has two separate effects:
 1. the cross-domain message creates a pending L2 note;
 2. bridged ETH arrives as L2 backing.
 
-The app polls /api/mode3/status/:commitment. When received and backed, it calls
-/api/l2/activate. The app backend submits activateNote using the L2 transaction
-key.
+The app backend polls public `NoteReceived` / `NoteActivated` events. When a
+pending note has bridge backing, it submits `activateNote` with the destination
+transaction key; no recipient request or private note material is required.
+`/api/l2/activate` remains available as an operational fallback.
 
 After activation, the app reconstructs the L2 tree and the SDK generates
 withdrawL2 locally. The app sends /api/l2/withdraw and the backend submits the
@@ -557,4 +558,3 @@ packages/contracts/script/BridgeFunds.s.sol
 ~~~
 
 Progress tracker: PROGRESS.md
-

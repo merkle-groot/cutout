@@ -10,6 +10,13 @@
 - Integrated testnet ASP root publishing in the relayer.
 - Full Ethereum → OP Sepolia two-step withdrawal flow: relay, activation, L2 proof, withdrawal.
 - Starknet Sepolia destination support: L1 relay to a Starknet destination (send side).
+- **Arbitrum destination support (both sides):** L1 `_bridgeArbitrum` (retryable ticket + gateway,
+  native single-ticket, fee floor/refund) and the delivery-side `L2PrivacyPoolArbitrum`, which
+  inherits the L2 pool and swaps OP-Stack messenger auth for Arbitrum address aliasing
+  (`AddressAliasHelper`). SDK forwards the per-destination `msg.value`; the relayer prices that
+  fronted L1→L2 fee into its quote (`destinationChainId`). Deploy via `DeployL2Arbitrum.s.sol` +
+  `ConfigureArbitrumBridge.s.sol`. Unit-tested; a real-retryable fork test and mainnet endpoint
+  confirmation remain before production use.
 - Added `UpdateL1.s.sol` for L1 ASP-root and pool-configuration updates.
 - Added `BridgeFunds.s.sol` for target-specific native ETH funding of supported OP Stack L2 relayers.
 - **Corrected the `withdrawL1` public-signal layout** (see below) and pinned it to the circuit.

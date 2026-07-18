@@ -253,6 +253,7 @@ Build note: the relayer can run from TypeScript directly (`start:ts`) or built
 | `RELAYER_API_URL` | `http://localhost:8788` ✅ |
 | `ASP_API_URL` | empty → falls back to relayer's ASP ✅ |
 | `L2_EVM_CHAINS` | comma list of EVM L2 keys, e.g. `op` (add `base` when filled) |
+| `L2_AUTO_ACTIVATE` / `L2_AUTO_ACTIVATE_POLL_MS` | `true` / `10000`; the app relayer activates backed destination notes automatically |
 | `OP_CHAIN_ID` / `OP_CHAIN_NAME` / `OP_RPC_URL` | OP Sepolia |
 | `OP_POOL_ADDRESS` / `OP_DEPLOYMENT_BLOCK` | `0xfA1B3a…` / `46208090` (rebound pool) |
 | ⚠️ `OP_RELAYER_PRIVATE_KEY` | funded OP Sepolia account — activates + withdraws OP notes |

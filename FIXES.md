@@ -394,6 +394,96 @@ Starknet in the UI** rather than risking the loss.
 
 ---
 
+## 16. The frontend showed spent notes as spendable
+
+**Severity: high. Silent until the relayer rejected the spend.**
+
+A note's `status: "spent"` was a **write-only local cache**. It only flipped after a successful relay
+in the *same* browser session (`runSend`); nothing ever reconciled it against the chain. So a note
+spent on another device — or rebuilt by RECOVER, which walks public deposits and *cannot tell a spent
+note from a live one*, defaulting every rebuilt note to `ready` — or lost to a persistence race across
+a tab reload, stayed `ready`. `pickNote` offered it, the client built a **valid** proof against a live
+historical root, and the L1 pool's `relay()` was the *first* thing to catch it: `NullifierAlreadySpent()`.
+
+The on-chain truth was available the whole time: the pool's public `nullifierHashes(uint256)` mapping,
+and the `Withdrawn` event's `_spentNullifier` — which is `existingNullifierHash` = `Poseidon([nullifier])`,
+single-input, per `commitmentL1.circom`. The frontend simply never asked.
+
+**Fixed** — the client reconciles against the chain instead of trusting local state:
+
+- server: `GET /api/l1/spent-nullifiers` sweeps `Withdrawn` events (reusing the incremental
+  `createLogCache`) and returns the burned nullifier-hash set;
+- client: `reconcileSpentNotes()` marks any local note whose `poseidon1([nullifier])` is in that set as
+  spent — wired into `afterUnlock` (non-blocking, re-renders on a change), `recoverL1Notes` (recovery
+  no longer resurrects spent notes as `ready`), and a pre-spend guard in `runSend` (bails with a clear
+  message rather than surfacing the raw revert);
+- `poseidon-lite/poseidon1` on the client — browser-native (no Node deps), and verified byte-identical
+  to the circuit/SDK Poseidon.
+
+**Best-effort by design.** The sweep is only as complete as the RPC's `eth_getLogs` history, and a
+failed sweep leaves the cache untouched — degrading to "the relayer is the backstop", never to a false
+`ready`. `app/server/index.mjs`, `app/src/main.js`.
+
+---
+
+## 17. Starknet showed "DISABLED — unreachable" on a healthy pool
+
+**Severity: medium. Intermittent, and it masked a real config trap.**
+
+`/api/starknet/config` reads the immutable `l1_pool` binding from storage to decide whether Starknet is
+safe to send to (§14). That read was **one-shot with no retry**: a single failure left
+`l1PoolMatches = null`, which the UI renders as the generic "unreachable" — even though the binding
+actually *matched* (`POOL_ADDRESS` == the pool's `l1_pool`, both `0xf913ab5e…`). The trigger was
+Infura's `-32603 service temporarily unavailable` blips.
+
+Two entangled facts made this confusing to diagnose:
+
+- **Infura Starknet serves JSON-RPC spec 0.8.1; Alchemy v0.10 serves 0.10.3.** The app runs
+  starknet.js 6.x, which speaks 0.8.x — so the *app runtime* must stay on Infura. Alchemy is for the
+  Cairo *deploy* tooling (sncast demands 0.10.x). They are deliberately different nodes; "unifying"
+  them breaks the write path.
+- Alchemy additionally rejects the default `pending` block tag in `getStorageAt` with
+  `-32602 Invalid block id`, so naively "switch to Alchemy" swaps one failure for another.
+
+**Fixed** in `getStarknetBoundL1Pool` (`app/server/index.mjs`): wrap the read in the existing
+`withRetry` so a transient blip no longer fail-closes the destination, and pin the query to `latest`
+(the slot is immutable, so `latest` == `pending`, and `latest` works on every provider). Runtime
+`STARKNET_RPC_URL` kept on Infura.
+
+---
+
+## 18. Every Starknet withdrawal reverted — the relay never paid the bridge fee
+
+**Severity: critical for Starknet/Arbitrum. OP-Stack unaffected — which is exactly why it hid.**
+
+The SDK's `relay()` simulated the pool call with **no `value`**, so `msg.value = 0` on every relay. The
+pool fronts the canonical bridge's L1→L2 message fee out of `msg.value` (`PrivacyPool._bridge`), and the
+requirement diverges by bridge family:
+
+| `BridgeKind` | required `msg.value` |
+|---|---|
+| OpStack | **0** — the note rides on L1-derived gas (so Base/Optimism relays worked) |
+| Starknet | `messageFee + tokenFee` — StarkGate charges a flat ETH fee for *each* of the two L1→L2 messages (note message + token deposit) |
+| Arbitrum | submission + L2 gas (`messageFee + messageGasLimit·messageMaxFeePerGas`), plus a token leg for ERC20 |
+
+With 0 attached, `_bridgeStarknet` reverted `InsufficientBridgeFee()`. Measured on Starknet Sepolia:
+`messageFee + tokenFee = 0.0002 ETH` required; the relay fee earned from the note (~0.00073 ETH) covers
+it — so it was never an economics problem, the ETH simply wasn't sent.
+
+**Fixed** in `packages/sdk/src/core/contracts.service.ts`: a new `bridgeMsgValue()` reads
+`Entrypoint.getBridgeConfig(chainId, asset)` and computes the exact `msg.value` mirroring `_bridge` per
+`BridgeKind`; `relay()` attaches it. The deprecated `withdraw()` alias — which carried the identical
+latent bug — now delegates to `relay()` rather than duplicating (and drifting from) it. The relayer
+runs the local workspace SDK (`node_modules/@0xbow/privacy-pools-core-sdk` → symlink), so the SDK was
+rebuilt; JS only, with the circuit `artifacts/` restored byte-identical so the deployed verifier keys
+are untouched.
+
+**Follow-up (open).** The relayer's *quote* logic should ensure the quoted relay fee ≥ bridge fee + gas
+for Starknet/Arbitrum, or a small withdrawal could be quoted a fee below the 0.0002 ETH the relayer now
+fronts from its own balance.
+
+---
+
 ## Deployment blockers
 
 1. **Redeploy the Sepolia L1 pool.** (See §1.) `ProofLib` is inlined into `PrivacyPool` bytecode and
@@ -415,6 +505,11 @@ Stated plainly, because "it compiles" is not "it works":
   and no call was made against a live pool. *The calldata conversion is proven; the chain interaction
   is not.* The gate is fail-closed, so this is safe by default — but the honest status is **"correctly
   disabled," not "working."**
+- **The §18 bridge-fee fix is confirmed against the on-chain config, not against a live relay.** The
+  required `msg.value` (0.0002 ETH for Starknet Sepolia) was read from `getBridgeConfig` and the branch
+  math mirrors `_bridge`, but a fresh withdrawal proof (unused nullifier) can only be produced by the
+  app flow — so the actual `InsufficientBridgeFee` clear must still be observed with a real Starknet
+  relay. Restart the relayer first (it loads the SDK at startup).
 - **The relayer's integration CLI** is ported and typechecks, but needs a live chain plus a running
   relayer to execute. It has not been run.
 - **`data.service.spec.ts` still never runs.** Its decode/scan/tree paths are now covered offline, but

@@ -23,6 +23,7 @@ import { validateMnemonic } from "@scure/bip39";
 
 const IDENTITY_KEY = "f5-identity-v1";
 const NOTES_KEY = "f5-notes-v1";
+const L2_SCAN_KEY = "f5-l2-scan-v1";
 const L2_HISTORY_KEY = "f5-l2-history-v1";
 const LEGACY_NOTE_PREFIX = "f5-note-";
 
@@ -73,6 +74,8 @@ export function identityUnwrapKind() {
 export function forgetIdentity() {
   localStorage.removeItem(IDENTITY_KEY);
   localStorage.removeItem(NOTES_KEY);
+  localStorage.removeItem(L2_SCAN_KEY);
+  localStorage.removeItem(L2_HISTORY_KEY);
 }
 
 /*//////////////////////////////////////////////////////////////
@@ -190,6 +193,64 @@ export async function loadNotes(vaultKeyHex, scope) {
     return decrypted.notes ?? [];
   } catch {
     return [];
+  }
+}
+
+/*//////////////////////////////////////////////////////////////
+                          L2 SCAN CACHE
+//////////////////////////////////////////////////////////////*/
+
+const L2_NOTE_BIGINT_FIELDS = ["cDest", "value", "sharedSecretX", "stealthPrivKey", "nullifier"];
+
+function serialiseL2Note(note) {
+  return Object.fromEntries(Object.entries(note).map(([field, value]) => [
+    field,
+    L2_NOTE_BIGINT_FIELDS.includes(field) ? String(value) : value,
+  ]));
+}
+
+function reviveL2Note(note) {
+  if (!note || typeof note !== "object" || typeof note.chain !== "string") return null;
+  try {
+    const revived = { ...note };
+    for (const field of L2_NOTE_BIGINT_FIELDS) revived[field] = BigInt(note[field]);
+    return revived;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist matched L2 notes, including the private spend material derived during
+ * scanning. This must use the mnemonic-derived AES key; writing these fields to
+ * plaintext localStorage would expose the ability to spend the notes.
+ */
+export async function saveL2Scan(vaultKeyHex, scope, scan) {
+  const key = await keyFromVaultHex(vaultKeyHex, ["encrypt"]);
+  const payload = {
+    scope: String(scope),
+    scannedCount: Number(scan?.scannedCount ?? 0),
+    notes: (scan?.notes ?? []).map(serialiseL2Note),
+  };
+  localStorage.setItem(L2_SCAN_KEY, JSON.stringify(await encryptJson(key, payload)));
+}
+
+/** Load only cache entries belonging to the current L1/L2 deployment scope. */
+export async function loadL2Scan(vaultKeyHex, scope) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(L2_SCAN_KEY) ?? "null");
+    if (!stored) return { notes: [], scannedCount: 0 };
+    const decrypted = await decryptJson(await keyFromVaultHex(vaultKeyHex, ["decrypt"]), stored);
+    if (!decrypted || typeof decrypted !== "object" || String(decrypted.scope) !== String(scope)) {
+      return { notes: [], scannedCount: 0 };
+    }
+    const notes = Array.isArray(decrypted.notes) ? decrypted.notes.map(reviveL2Note).filter(Boolean) : [];
+    const scannedCount = Number.isFinite(Number(decrypted.scannedCount))
+      ? Math.max(notes.length, Number(decrypted.scannedCount))
+      : notes.length;
+    return { notes, scannedCount };
+  } catch {
+    return { notes: [], scannedCount: 0 };
   }
 }
 

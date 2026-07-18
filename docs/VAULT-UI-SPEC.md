@@ -65,7 +65,7 @@ identity; the encrypted vault stays on disk).
 ## Note status taxonomy (pills + balance math)
 
 - **L1:** `READY` (spendable) · `SPENT →` (sent/bridged out — history, greyed).
-- **L2/Starknet:** `ACTIVATE` (received, needs activation) · `SPENDABLE`
+- **L2/Starknet:** `ACTIVATING` (received, relayer activation pending) · `SPENDABLE`
   (activated, in tree) · `WITHDRAWN ✓` (landed to a final address — history,
   greyed).
 - Pill colors: teal = ready/spendable, yellow = activate/pending, muted =

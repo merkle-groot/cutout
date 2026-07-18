@@ -35,7 +35,7 @@ withdrawn history)** and enough actions to **deposit, send, and withdraw**.
 ## Note status taxonomy (drives pills + balance)
 
 - **L1:** `ready` (spendable) · `spent` (sent/bridged out — history, greyed).
-- **L2/Starknet:** `activate` (received, needs activation) · `spendable`
+- **L2/Starknet:** `activating` (received, relayer activation pending) · `spendable`
   (activated, in tree) · `withdrawn` (landed to final address — history, greyed).
 - L2 status is derived from the **already-fetched scan index** (a note in the
   activated `proofs` with index ≥ 0 is `spendable`, else `activate`), plus the

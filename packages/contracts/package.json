@@ -22,6 +22,8 @@
     "deploy:l2:base-sepolia": "bash -c 'source .env && L2_TARGET=BASE_SEPOLIA forge script script/DeployL2.s.sol:DeployL2Testnet --account DEPLOYER --rpc-url $BASE_SEPOLIA_RPC --sender $DEPLOYER_ADDRESS --slow -vv $0'",
     "configure:bridge:base-sepolia": "bash -c 'source .env && L2_TARGET=BASE_SEPOLIA forge script script/ConfigureOpStackBridge.s.sol:ConfigureOpStackBridge --account DEPLOYER --rpc-url $ETHEREUM_SEPOLIA_RPC --sender $DEPLOYER_ADDRESS --slow -vv $0'",
     "configure:bridge:starknet-sepolia": "bash -c 'source .env && L2_TARGET=STARKNET_SEPOLIA forge script script/ConfigureStarknetBridge.s.sol:ConfigureStarknetBridge --account DEPLOYER --rpc-url $ETHEREUM_SEPOLIA_RPC --sender $DEPLOYER_ADDRESS --slow -vv $0'",
+    "deploy:l2:arb-sepolia": "bash -c 'source .env && L2_TARGET=ARB_SEPOLIA forge script script/DeployL2Arbitrum.s.sol:DeployL2Arbitrum --account DEPLOYER --rpc-url $ARB_SEPOLIA_RPC --sender $DEPLOYER_ADDRESS --slow -vv $0'",
+    "configure:bridge:arb-sepolia": "bash -c 'source .env && L2_TARGET=ARB_SEPOLIA forge script script/ConfigureArbitrumBridge.s.sol:ConfigureArbitrumBridge --account DEPLOYER --rpc-url $ETHEREUM_SEPOLIA_RPC --sender $DEPLOYER_ADDRESS --slow -vv $0'",
     "lint:check": "yarn lint:sol && forge fmt --check",
     "lint:fix": "sort-package-json && forge fmt && yarn lint:sol --fix",
     "lint:natspec": "npx @defi-wonderland/natspec-smells --config natspec-smells.config.js",

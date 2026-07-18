@@ -149,4 +149,23 @@ export class SdkProvider implements SdkProviderInterface {
       }
     }
   }
+
+  /**
+   * The L1->L2 message/gas fee the relayer must front for a `relay()` bound to
+   * `destinationChainId` (0 for OP-Stack, non-zero for Arbitrum/Starknet). Read
+   * from the on-chain bridge config via the SDK so the pool and quote never drift.
+   *
+   * @param {number} processingChainId - The chain the relay is submitted on (where the entrypoint lives).
+   * @param {Address} assetAddress - The pool asset (native sentinel or ERC20).
+   * @param {bigint} destinationChainId - The bridge destination (`withdrawal.chainId`).
+   * @returns {Promise<bigint>} - The fronted fee in wei.
+   */
+  async bridgeMsgValue(
+    processingChainId: number,
+    assetAddress: Address,
+    destinationChainId: bigint,
+  ): Promise<bigint> {
+    const contracts = this.getContractsForChain(processingChainId);
+    return contracts.bridgeMsgValue(assetAddress, destinationChainId);
+  }
 }

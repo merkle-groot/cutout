@@ -2,16 +2,28 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 import { fileURLToPath } from "node:url";
-import { createPublicClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { readFileSync } from "node:fs";
 import { Account, RpcProvider, hash as snHash } from "starknet";
 import { LeanIMT } from "@zk-kit/lean-imt";
 import { poseidon } from "maci-crypto/build/ts/hashing.js";
-import { Circuits, DataService, PrivacyPoolSDK } from "@0xbow/privacy-pools-core-sdk";
+import { Circuits, PrivacyPoolSDK } from "@0xbow/privacy-pools-core-sdk";
+import { EventIndex } from "./event-index.mjs";
+import { AutomaticNoteActivator, KeyedSerialExecutor, planBackedActivations } from "./note-activator.mjs";
+import { retryRpc } from "./rpc-retry.mjs";
+import { rpcRuntime } from "./rpc-runtime.mjs";
+import { StarknetEventIndex } from "./starknet-event-index.mjs";
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
+
+function evmClient(chainId, rpcUrl) {
+  return rpcRuntime.client(`evm:${chainId}`, rpcUrl);
+}
+
+function l1Client(rpcUrl = process.env.PUBLIC_RPC_URL) {
+  return evmClient(Number(process.env.CHAIN_ID ?? 1), rpcUrl);
+}
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
@@ -33,74 +45,83 @@ function sendJson(res, payload, status = 200) {
 }
 
 /**
- * Cached, incremental view of the pool's `Deposited` events.
- *
- * Mnemonic recovery and every new deposit both need the full deposit list, and
- * replaying the pool's entire log history per request does not survive contact
- * with a real pool. Cache the events and only fetch forward from the last block
- * we have seen.
- */
-const depositCache = { events: [], cursor: null, inFlight: null };
-
-/**
  * Blocks re-scanned on every refresh. The cursor must trail the chain head:
  * parking it exactly at the head would permanently miss any event that a reorg
  * reshuffles into a block we have already passed.
  */
 const REORG_BUFFER = 16n;
+const eventIndex = new EventIndex({ runtime: rpcRuntime, reorgBuffer: REORG_BUFFER, retry: withRetry });
+
+const depositedEvent = {
+  type: "event",
+  name: "Deposited",
+  inputs: [
+    { name: "_depositor", type: "address", indexed: true },
+    { name: "_commitment", type: "uint256", indexed: false },
+    { name: "_label", type: "uint256", indexed: false },
+    { name: "_value", type: "uint256", indexed: false },
+    { name: "_precommitmentHash", type: "uint256", indexed: false },
+  ],
+};
+
+function parseDepositLog(log) {
+  const args = log.args ?? {};
+  if (
+    args._depositor === undefined ||
+    args._commitment === undefined ||
+    args._label === undefined ||
+    args._value === undefined ||
+    args._precommitmentHash === undefined ||
+    log.blockNumber === undefined ||
+    !log.transactionHash
+  ) {
+    throw new Error("Invalid Deposited log returned by RPC");
+  }
+  return {
+    depositor: args._depositor.toLowerCase(),
+    commitment: args._commitment,
+    label: args._label,
+    value: args._value,
+    precommitment: args._precommitmentHash,
+    blockNumber: log.blockNumber,
+    transactionHash: log.transactionHash,
+  };
+}
 
 async function getDepositEvents({ force = false } = {}) {
   const rpcUrl = process.env.PUBLIC_RPC_URL;
   const poolAddress = process.env.POOL_ADDRESS;
   if (!rpcUrl || !poolAddress) throw new Error("Pool indexing is not configured");
 
-  if (force) {
-    depositCache.events = [];
-    depositCache.cursor = null;
-  }
-  // Collapse concurrent callers onto one refresh: the deposit flow polls this
-  // while the UI is also asking for it.
-  if (depositCache.inFlight) return depositCache.inFlight;
-
-  depositCache.inFlight = (async () => {
-    try {
-      const chainId = Number(process.env.CHAIN_ID ?? 1);
-      const deployBlock = BigInt(process.env.DEPLOYMENT_BLOCK ?? "0");
-      const fromBlock = depositCache.cursor ?? deployBlock;
-
-      const head = await createPublicClient({ transport: http(rpcUrl) }).getBlockNumber();
-      const data = new DataService([{ chainId, privacyPoolAddress: poolAddress, startBlock: fromBlock, rpcUrl }]);
-      const fresh = await data.getDeposits({ chainId, address: poolAddress, scope: 0n, deploymentBlock: fromBlock });
-
-      // The trailing window is re-scanned each time, so events repeat. A
-      // precommitment is unique by construction (the pool rejects a reused one),
-      // which makes it a safe dedupe key.
-      const seen = new Set(depositCache.events.map((e) => e.precommitment));
-      for (const event of fresh) {
-        if (seen.has(event.precommitment)) continue;
-        seen.add(event.precommitment);
-        depositCache.events.push(event);
-      }
-      depositCache.events.sort((a, b) => (a.blockNumber === b.blockNumber ? 0 : a.blockNumber < b.blockNumber ? -1 : 1));
-
-      // Advance to the head we actually scanned, less the reorg buffer — never
-      // to "the last block that happened to contain a deposit", or a quiet pool
-      // would re-scan the same range on every single request.
-      const next = head > REORG_BUFFER ? head - REORG_BUFFER : 0n;
-      depositCache.cursor = next > fromBlock ? next : fromBlock;
-      return depositCache.events;
-    } finally {
-      depositCache.inFlight = null;
-    }
-  })();
-
-  return depositCache.inFlight;
+  const chainId = Number(process.env.CHAIN_ID ?? 1);
+  const logs = await eventIndex.read({
+    chain: `evm:${chainId}`,
+    rpcUrl,
+    address: poolAddress,
+    event: depositedEvent,
+    eventKey: "Deposited(address,uint256,uint256,uint256,uint256)",
+    fromBlock: BigInt(process.env.DEPLOYMENT_BLOCK ?? "0"),
+    force,
+  });
+  return logs.map(parseDepositLog);
 }
 
 let sdk;
 function getSdk() {
   if (!sdk) sdk = new PrivacyPoolSDK(new Circuits({ browser: false }));
   return sdk;
+}
+
+// Automatic activation and user withdrawals share destination signers. Queue
+// writes per signer so independently-created clients cannot reuse one nonce.
+const l2TransactionQueue = new KeyedSerialExecutor();
+
+function evmSignerQueueKey(chain) {
+  return `evm:${chain.chainId}:${privateKeyToAccount(chain.relayerKey).address.toLowerCase()}`;
+}
+
+function starknetSignerQueueKey(config) {
+  return `starknet:${config.chainId}:${config.relayerAddress.toLowerCase()}`;
 }
 
 const starknetU256 = (value) => {
@@ -123,8 +144,16 @@ function getStarknetConfig() {
 
 function getStarknetProvider(config) {
   if (!config.rpcUrl) throw new Error("STARKNET_RPC_URL is not configured");
-  return new RpcProvider({ nodeUrl: config.rpcUrl });
+  let provider = starknetProviders.get(config.rpcUrl);
+  if (!provider) {
+    provider = new RpcProvider({ nodeUrl: config.rpcUrl });
+    starknetProviders.set(config.rpcUrl, provider);
+  }
+  return provider;
 }
+
+const starknetProviders = new Map();
+const starknetEventIndex = new StarknetEventIndex({ retry: withRetry, reorgBuffer: Number(REORG_BUFFER) });
 
 /**
  * The configured EVM L2 destinations, one per key in `L2_EVM_CHAINS` (e.g. "op,base").
@@ -176,6 +205,14 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
+app.get("/api/rpc-metrics", (_req, res) => {
+  if (process.env.RPC_METRICS_ENABLED !== "true") {
+    return res.status(404).json({ error: "RPC metrics are disabled; set RPC_METRICS_ENABLED=true" });
+  }
+  res.set("cache-control", "no-store");
+  return res.json(rpcRuntime.snapshot());
+});
+
 app.get("/api/quote", (_req, res) => {
   const feeBps = BigInt(process.env.RELAY_FEE_BPS ?? "30");
   res.json({
@@ -206,7 +243,7 @@ app.post("/api/relayer/request", async (req, res) => {
   }
 });
 
-app.get("/api/config", (_req, res) => {
+app.get("/api/config", async (_req, res) => {
   const config = {
     chainId: Number(process.env.CHAIN_ID ?? 1),
     chainName: process.env.CHAIN_NAME ?? "Ethereum mainnet",
@@ -227,10 +264,11 @@ app.get("/api/config", (_req, res) => {
   const entrypointAddress = process.env.ENTRYPOINT_ADDRESS;
   if (!config.rpcUrl || !entrypointAddress || !config.asset) return res.json(config);
 
-  void (async () => {
-    try {
-      const client = createPublicClient({ transport: http(config.rpcUrl) });
-      const result = await client.readContract({
+  try {
+    const client = l1Client(config.rpcUrl);
+    const result = await rpcRuntime.cachedRead(
+      `asset-config:${config.chainId}:${entrypointAddress.toLowerCase()}:${config.asset.toLowerCase()}`,
+      () => client.readContract({
         address: entrypointAddress,
         abi: [{
           type: "function",
@@ -246,16 +284,17 @@ app.get("/api/config", (_req, res) => {
         }],
         functionName: "assetConfig",
         args: [config.asset],
-      });
-      config.minDepositWei = result[1].toString();
-      config.vettingFeeBps = Number(result[2]);
-      config.maxRelayFeeBps = Number(result[3]);
-      return res.json(config);
-    } catch (error) {
-      console.warn("[CONFIG WARNING] Could not read live asset configuration:", error instanceof Error ? error.message : error);
-      return res.json(config);
-    }
-  })();
+      }),
+      { maxAgeMs: Number(process.env.RPC_CONFIG_TTL_MS ?? 30_000) },
+    );
+    config.minDepositWei = result[1].toString();
+    config.vettingFeeBps = Number(result[2]);
+    config.maxRelayFeeBps = Number(result[3]);
+    return res.json(config);
+  } catch (error) {
+    console.warn("[CONFIG WARNING] Could not read live asset configuration:", error instanceof Error ? error.message : error);
+    return res.json(config);
+  }
 });
 
 app.get("/api/activity", async (_req, res) => {
@@ -265,9 +304,19 @@ app.get("/api/activity", async (_req, res) => {
 
   try {
     const chainId = Number(process.env.CHAIN_ID ?? 1);
-    const data = new DataService([{ chainId, privacyPoolAddress: poolAddress, startBlock: BigInt(process.env.DEPLOYMENT_BLOCK ?? "0"), rpcUrl }]);
-    const pool = { chainId, address: poolAddress, scope: 0n, deploymentBlock: BigInt(process.env.DEPLOYMENT_BLOCK ?? "0") };
-    const [deposits, withdrawals] = await Promise.all([getDepositEvents(), data.getWithdrawals(pool)]);
+    const fromBlock = BigInt(process.env.DEPLOYMENT_BLOCK ?? "0");
+    const [deposits, withdrawalLogs] = await Promise.all([
+      getDepositEvents(),
+      eventIndex.read({
+        chain: `evm:${chainId}`,
+        rpcUrl,
+        address: poolAddress,
+        event: withdrawnEvent,
+        eventKey: "Withdrawn(uint256,uint256,uint256,uint256)",
+        fromBlock,
+      }),
+    ]);
+    const withdrawals = withdrawalLogs.map(parseWithdrawalLog);
     // sendJson, not res.json: these events carry bigints and JSON.stringify throws on them.
     return sendJson(res, { configured: true, deposits: deposits.slice(-12), withdrawals: withdrawals.slice(-12) });
   } catch (error) {
@@ -319,92 +368,11 @@ app.get("/api/l1/deposits", async (req, res) => {
 });
 
 /**
- * Blocks per `eth_getLogs` window.
- *
- * Public RPCs cap the range (Infura rejects >10k with "range N exceeds limit of 10000"). A
- * deployment-block->latest sweep is a time bomb: it works right after deploy and then breaks
- * forever once the chain advances past the cap, so every historical query must be chunked.
- */
-const LOG_CHUNK_BLOCKS = BigInt(process.env.LOG_CHUNK_BLOCKS ?? "9000");
-
-/**
  * Retry a transient RPC failure with backoff. Public nodes answer `-32603 service temporarily
  * unavailable` under load, and one blip should not fail a withdrawal's state proof.
  */
 async function withRetry(fn, attempts = 4) {
-  let lastError;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error;
-      if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
-    }
-  }
-  throw lastError;
-}
-
-/**
- * `getLogs` over [fromBlock, toBlock] in windows the RPC will actually accept.
- * Deliberately serial — firing every window at once trips public-RPC rate limits.
- */
-async function getLogsChunked(client, { address, event, fromBlock, toBlock }) {
-  const logs = [];
-  for (let start = fromBlock; start <= toBlock; start += LOG_CHUNK_BLOCKS + 1n) {
-    const end = start + LOG_CHUNK_BLOCKS > toBlock ? toBlock : start + LOG_CHUNK_BLOCKS;
-    logs.push(...(await withRetry(() => client.getLogs({ address, event, fromBlock: start, toBlock: end }))));
-  }
-  return logs;
-}
-
-/**
- * An incrementally cached log sweep — the generic form of `depositCache`.
- *
- * Replaying a pool's whole history per request does not survive contact with a real pool: the
- * state proof re-swept every `LeafInserted` from the deployment block on EVERY "quote & prove",
- * which is several `eth_getLogs` round-trips per withdrawal against a rate-limited node. Cache the
- * logs and only fetch forward from the last block scanned.
- *
- * @param event ABI event to sweep
- * @param key   stable unique id for a log; dedupes the re-scanned trailing window
- */
-function createLogCache({ event, key }) {
-  const cache = { logs: [], cursor: null, inFlight: null };
-  return function readLogs({ client, address, fromBlock, force = false }) {
-    if (force) {
-      cache.logs = [];
-      cache.cursor = null;
-    }
-    // Collapse concurrent callers onto one refresh.
-    if (cache.inFlight) return cache.inFlight;
-
-    cache.inFlight = (async () => {
-      try {
-        const head = await withRetry(() => client.getBlockNumber());
-        const start = cache.cursor ?? fromBlock;
-        const fresh = await getLogsChunked(client, { address, event, fromBlock: start, toBlock: head });
-
-        // The trailing window is re-scanned each refresh, so logs repeat; `key` drops the overlap.
-        const seen = new Set(cache.logs.map(key));
-        for (const log of fresh) {
-          const id = key(log);
-          if (seen.has(id)) continue;
-          seen.add(id);
-          cache.logs.push(log);
-        }
-
-        // Trail the head by the reorg buffer — parking the cursor at the head would permanently
-        // miss any event a reorg reshuffles into a block we already passed.
-        const next = head > REORG_BUFFER ? head - REORG_BUFFER : 0n;
-        cache.cursor = next > start ? next : start;
-        return cache.logs;
-      } finally {
-        cache.inFlight = null;
-      }
-    })();
-
-    return cache.inFlight;
-  };
+  return retryRpc(fn, { attempts });
 }
 
 const leafInsertedEvent = {
@@ -416,16 +384,61 @@ const leafInsertedEvent = {
     { name: "_root", type: "uint256", indexed: false },
   ],
 };
-/** Every `LeafInserted` in the L1 pool. A leaf's index is unique, so it is a safe dedupe key. */
-const readLeafLogs = createLogCache({ event: leafInsertedEvent, key: (log) => String(log.args._index) });
+const withdrawnEvent = {
+  type: "event",
+  name: "Withdrawn",
+  inputs: [
+    { name: "_newCommitmentHashL1", type: "uint256", indexed: false },
+    { name: "_newCommitmentHashL2", type: "uint256", indexed: false },
+    { name: "_value", type: "uint256", indexed: false },
+    { name: "_spentNullifier", type: "uint256", indexed: false },
+  ],
+};
+
+function parseWithdrawalLog(log) {
+  const args = log.args ?? {};
+  if (
+    args._newCommitmentHashL1 === undefined ||
+    args._newCommitmentHashL2 === undefined ||
+    args._value === undefined ||
+    args._spentNullifier === undefined ||
+    log.blockNumber === undefined ||
+    !log.transactionHash
+  ) {
+    throw new Error("Invalid Withdrawn log returned by RPC");
+  }
+  return {
+    withdrawn: args._value,
+    spentNullifier: args._spentNullifier,
+    newCommitment: args._newCommitmentHashL1,
+    newCommitmentL2: args._newCommitmentHashL2,
+    blockNumber: log.blockNumber,
+    transactionHash: log.transactionHash,
+  };
+}
+
+function readL1Event(event, eventKey, { force = false } = {}) {
+  const rpcUrl = process.env.PUBLIC_RPC_URL;
+  const poolAddress = process.env.POOL_ADDRESS;
+  const chainId = Number(process.env.CHAIN_ID ?? 1);
+  return eventIndex.read({
+    chain: `evm:${chainId}`,
+    rpcUrl,
+    address: poolAddress,
+    event,
+    eventKey,
+    fromBlock: BigInt(process.env.DEPLOYMENT_BLOCK ?? "0"),
+    force,
+  });
+}
 
 app.get("/api/l1/state-proof/:commitment", async (req, res) => {
   const rpcUrl = process.env.PUBLIC_RPC_URL;
   const poolAddress = process.env.POOL_ADDRESS;
   if (!rpcUrl || !poolAddress) return res.status(503).json({ error: "L1 pool indexing is not configured" });
   try {
-    const client = createPublicClient({ transport: http(rpcUrl) });
-    const logs = await readLeafLogs({ client, address: poolAddress, fromBlock: BigInt(process.env.DEPLOYMENT_BLOCK ?? "0") });
+    const client = l1Client(rpcUrl);
+    const logs = await readL1Event(leafInsertedEvent, "LeafInserted(uint256,uint256,uint256)");
     // Sort a copy: `logs` is the cache's own array and must not be reordered in place.
     const ordered = [...logs].sort((a, b) => Number(a.args._index - b.args._index));
     const leaves = ordered.map((log) => log.args._leaf);
@@ -455,6 +468,35 @@ app.get("/api/l1/state-proof/:commitment", async (req, res) => {
   }
 });
 
+/**
+ * The set of nullifier hashes the L1 pool has already burned.
+ *
+ * A note's local `status` is a write-only cache — it only flips to "spent" after a
+ * successful relay in the session that spent it. A note spent on another device, or
+ * before a vault recovery (which rebuilds from public deposits and cannot tell a
+ * spent note from a live one), stays "ready" and gets offered for a spend the pool
+ * then rejects with `NullifierAlreadySpent`. This endpoint is the on-chain source of
+ * truth the client reconciles against. `_spentNullifier` IS the nullifier hash the
+ * pool marks spent — the same value the withdrawal circuit exposes as
+ * `existingNullifierHash` — so no hashing is needed here.
+ */
+app.get("/api/l1/spent-nullifiers", async (req, res) => {
+  const rpcUrl = process.env.PUBLIC_RPC_URL;
+  const poolAddress = process.env.POOL_ADDRESS;
+  if (!rpcUrl || !poolAddress) return res.status(503).json({ error: "L1 pool indexing is not configured" });
+  try {
+    const logs = await readL1Event(
+      withdrawnEvent,
+      "Withdrawn(uint256,uint256,uint256,uint256)",
+      { force: req.query.refresh === "1" },
+    );
+    const nullifiers = [...new Set(logs.map((log) => String(log.args._spentNullifier)))];
+    return sendJson(res, { nullifiers });
+  } catch (error) {
+    return sendJson(res, { error: error instanceof Error ? error.message : "Unable to index spent nullifiers" }, 502);
+  }
+});
+
 app.get("/api/asp/proof/:label", async (req, res) => {
   const provider = process.env.ASP_API_URL || process.env.RELAYER_API_URL;
   if (!provider) return res.status(503).json({ error: "ASP_API_URL or RELAYER_API_URL is not configured" });
@@ -474,6 +516,134 @@ function evmL2Chain(chain) {
   return { id: chain.chainId, name: chain.chainName, nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: [chain.rpcUrl] } } };
 }
 
+const l2NoteEvent = {
+  type: "event",
+  name: "L2Note",
+  inputs: [
+    { name: "_newCommitmentHashL2", type: "uint256", indexed: true },
+    { name: "_ephemeralKey", type: "uint256[2]", indexed: false },
+    { name: "_viewTag", type: "bytes1", indexed: true },
+  ],
+};
+const noteReceivedEvent = {
+  type: "event",
+  name: "NoteReceived",
+  inputs: [
+    { name: "_commitment", type: "uint256", indexed: true },
+    { name: "_value", type: "uint256", indexed: false },
+  ],
+};
+const noteActivatedEvent = { ...noteReceivedEvent, name: "NoteActivated" };
+const l2BackingAbi = [
+  {
+    type: "function",
+    name: "activatedSupply",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "tokensReceivedFromBridge",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
+];
+const scopeAbi = [{
+  type: "function",
+  name: "SCOPE",
+  stateMutability: "view",
+  inputs: [],
+  outputs: [{ type: "uint256" }],
+}];
+const MULTICALL3_ADDRESS = process.env.MULTICALL3_ADDRESS ?? "0xcA11bde05977b3631167028862bE2a173976CA11";
+
+function parseL2NoteLog(log) {
+  const args = log.args ?? {};
+  if (
+    args._newCommitmentHashL2 === undefined ||
+    !args._ephemeralKey ||
+    args._viewTag === undefined ||
+    log.blockNumber === undefined ||
+    !log.transactionHash
+  ) {
+    throw new Error("Invalid L2Note log returned by RPC");
+  }
+  return {
+    commitment: args._newCommitmentHashL2,
+    ephemeralKey: [args._ephemeralKey[0], args._ephemeralKey[1]],
+    viewTag: args._viewTag,
+    blockNumber: log.blockNumber,
+    transactionHash: log.transactionHash,
+  };
+}
+
+function parseCommitmentValueLog(log, kind) {
+  const args = log.args ?? {};
+  if (
+    args._commitment === undefined ||
+    args._value === undefined ||
+    log.blockNumber === undefined ||
+    !log.transactionHash
+  ) {
+    throw new Error(`Invalid ${kind} log returned by RPC`);
+  }
+  return {
+    commitment: args._commitment,
+    value: args._value,
+    blockNumber: log.blockNumber,
+    transactionHash: log.transactionHash,
+  };
+}
+
+async function readL1L2Notes() {
+  return (await readL1Event(l2NoteEvent, "L2Note(uint256,uint256[2],bytes1)"))
+    .map(parseL2NoteLog);
+}
+
+async function readEvmL2CommitmentEvents(chain, event, eventKey) {
+  const logs = await eventIndex.read({
+    chain: `evm:${chain.chainId}`,
+    rpcUrl: chain.rpcUrl,
+    address: chain.poolAddress,
+    event,
+    eventKey,
+    fromBlock: BigInt(chain.deploymentBlock ?? "0"),
+  });
+  return logs.map((log) => parseCommitmentValueLog(log, event.name));
+}
+
+function buildScannableNotes(deliveries, received) {
+  const values = new Map(received.map((event) => [event.commitment, event.value]));
+  return deliveries.flatMap((note) => {
+    const value = values.get(note.commitment);
+    return value === undefined ? [] : [{
+      commitment: note.commitment,
+      ephemeralKey: note.ephemeralKey,
+      viewTag: note.viewTag,
+      value,
+    }];
+  });
+}
+
+function reconstructL2StateTree(activated) {
+  const tree = new LeanIMT((left, right) => poseidon([left, right]));
+  for (const event of activated) tree.insert(event.commitment);
+  return tree;
+}
+
+function evmL2Scope(chain) {
+  return rpcRuntime.cachedRead(
+    `evm-scope:${chain.chainId}:${chain.poolAddress.toLowerCase()}`,
+    () => evmClient(chain.chainId, chain.rpcUrl).readContract({
+      address: chain.poolAddress,
+      abi: scopeAbi,
+      functionName: "SCOPE",
+    }),
+  );
+}
+
 app.get("/api/l2/:chain/index", async (req, res) => {
   const l1Rpc = process.env.PUBLIC_RPC_URL;
   const l1Pool = process.env.POOL_ADDRESS;
@@ -482,26 +652,14 @@ app.get("/api/l2/:chain/index", async (req, res) => {
   if (!l1Rpc || !l1Pool) return res.json({ configured: false, candidates: [], proofs: [] });
 
   try {
-    const l1ChainId = Number(process.env.CHAIN_ID ?? 1);
-    const l2ChainId = chain.chainId;
-    const startBlock = BigInt(process.env.DEPLOYMENT_BLOCK ?? "0");
-    const l2StartBlock = BigInt(chain.deploymentBlock ?? "0");
-    const l1Data = new DataService([{ chainId: l1ChainId, privacyPoolAddress: l1Pool, startBlock, rpcUrl: l1Rpc }]);
-    // Infura rate-limits concurrent eth_getLogs calls. Keep the L2 indexer
-    // deliberately serialized because this endpoint is used interactively,
-    // not as a high-throughput event processor.
-    const l2Data = new DataService(
-      [{ chainId: l2ChainId, privacyPoolAddress: chain.poolAddress, startBlock: l2StartBlock, rpcUrl: chain.rpcUrl }],
-      new Map([[l2ChainId, { concurrency: 1, chunkDelayMs: 250, retryBaseDelayMs: 2000 }]]),
-    );
-    const l1 = { chainId: l1ChainId, address: l1Pool, scope: 0n, deploymentBlock: startBlock };
-    const l2 = { chainId: l2ChainId, address: chain.poolAddress, scope: 0n, deploymentBlock: l2StartBlock };
-    const deliveries = await l1Data.getL2Notes(l1);
-    const received = await l2Data.getL2NotesReceived(l2);
-    const activated = await l2Data.getL2NotesActivated(l2);
-    const scope = await createPublicClient({ transport: http(chain.rpcUrl) }).readContract({ address: chain.poolAddress, abi: [{ type: "function", name: "SCOPE", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] }], functionName: "SCOPE" });
-    const candidates = l1Data.buildScannableNotes(deliveries, received);
-    const tree = l2Data.reconstructL2StateTree(activated);
+    const [deliveries, received, activated, scope] = await Promise.all([
+      readL1L2Notes(),
+      readEvmL2CommitmentEvents(chain, noteReceivedEvent, "NoteReceived(uint256,uint256)"),
+      readEvmL2CommitmentEvents(chain, noteActivatedEvent, "NoteActivated(uint256,uint256)"),
+      evmL2Scope(chain),
+    ]);
+    const candidates = buildScannableNotes(deliveries, received);
+    const tree = reconstructL2StateTree(activated);
     const stateRoot = tree.root ?? 0n;
     const proofs = activated.map((event) => {
       const index = tree.indexOf(event.commitment);
@@ -518,8 +676,7 @@ app.get("/api/l2/:chain/config", async (req, res) => {
   let chain;
   try { chain = requireEvmL2(req.params.chain); } catch (e) { return res.status(e.status ?? 500).json({ error: e.message }); }
   try {
-    const client = createPublicClient({ transport: http(chain.rpcUrl) });
-    const scope = await client.readContract({ address: chain.poolAddress, abi: [{ type: "function", name: "SCOPE", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] }], functionName: "SCOPE" });
+    const scope = await evmL2Scope(chain);
     return res.json({ configured: Boolean(chain.relayerKey), chainId: chain.chainId, chainName: chain.chainName, poolAddress: chain.poolAddress, scope: scope.toString(), relayerAddress: chain.relayerKey ? privateKeyToAccount(chain.relayerKey).address : null });
   } catch (error) {
     return res.status(502).json({ error: error instanceof Error ? error.message : "Unable to read L2 configuration" });
@@ -530,18 +687,22 @@ app.get("/api/l2/:chain/status/:commitment", async (req, res) => {
   let chain;
   try { chain = requireEvmL2(req.params.chain); } catch (e) { return res.status(e.status ?? 500).json({ error: e.message }); }
   try {
-    const client = createPublicClient({ transport: http(chain.rpcUrl) });
+    const client = evmClient(chain.chainId, chain.rpcUrl);
     const abi = [
       { type: "function", name: "receivedCommitments", stateMutability: "view", inputs: [{ name: "commitment", type: "uint256" }], outputs: [{ type: "bool" }] },
       { type: "function", name: "pendingValue", stateMutability: "view", inputs: [{ name: "commitment", type: "uint256" }], outputs: [{ type: "uint256" }] },
       { type: "function", name: "currentRoot", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
     ];
     const commitment = BigInt(req.params.commitment);
-    const [received, pendingValue, currentRoot] = await Promise.all([
-      client.readContract({ address: chain.poolAddress, abi, functionName: "receivedCommitments", args: [commitment] }),
-      client.readContract({ address: chain.poolAddress, abi, functionName: "pendingValue", args: [commitment] }),
-      client.readContract({ address: chain.poolAddress, abi, functionName: "currentRoot" }),
-    ]);
+    const [received, pendingValue, currentRoot] = await client.multicall({
+      allowFailure: false,
+      multicallAddress: MULTICALL3_ADDRESS,
+      contracts: [
+        { address: chain.poolAddress, abi, functionName: "receivedCommitments", args: [commitment] },
+        { address: chain.poolAddress, abi, functionName: "pendingValue", args: [commitment] },
+        { address: chain.poolAddress, abi, functionName: "currentRoot" },
+      ],
+    });
     return res.json({ received, pendingValue: pendingValue.toString(), currentRoot: currentRoot.toString(), state: !received ? "bridge-pending" : pendingValue > 0n ? "received-pending-activation" : "activated" });
   } catch (error) {
     return res.status(502).json({ error: error instanceof Error ? error.message : "Unable to read L2 status" });
@@ -554,7 +715,12 @@ app.post("/api/l2/:chain/activate", async (req, res) => {
   if (!chain.relayerKey) return res.status(503).json({ error: `${chain.chainName} activation is not configured` });
   try {
     const interactions = getSdk().createContractInstance(chain.rpcUrl, evmL2Chain(chain), chain.poolAddress, chain.relayerKey);
-    const transaction = await interactions.activateNote(chain.poolAddress, BigInt(req.body.commitment));
+    const transaction = await l2TransactionQueue.run(evmSignerQueueKey(chain), async () => {
+      const submitted = await interactions.activateNote(chain.poolAddress, BigInt(req.body.commitment));
+      const receipt = await evmClient(chain.chainId, chain.rpcUrl).waitForTransactionReceipt({ hash: submitted.hash });
+      if (receipt.status !== "success") throw new Error(`activation transaction ${submitted.hash} reverted`);
+      return submitted;
+    });
     return res.json({ hash: transaction.hash });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "L2 activation failed" });
@@ -567,7 +733,12 @@ app.post("/api/l2/:chain/withdraw", async (req, res) => {
   if (!chain.relayerKey) return res.status(503).json({ error: `${chain.chainName} withdrawal is not configured` });
   try {
     const interactions = getSdk().createContractInstance(chain.rpcUrl, evmL2Chain(chain), chain.poolAddress, chain.relayerKey);
-    const transaction = await interactions.withdrawL2(chain.poolAddress, req.body.withdrawal, req.body.proof);
+    const transaction = await l2TransactionQueue.run(evmSignerQueueKey(chain), async () => {
+      const submitted = await interactions.withdrawL2(chain.poolAddress, req.body.withdrawal, req.body.proof);
+      const receipt = await evmClient(chain.chainId, chain.rpcUrl).waitForTransactionReceipt({ hash: submitted.hash });
+      if (receipt.status !== "success") throw new Error(`withdrawal transaction ${submitted.hash} reverted`);
+      return submitted;
+    });
     return res.json({ hash: transaction.hash });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "L2 withdrawal failed" });
@@ -588,8 +759,49 @@ app.post("/api/l2/:chain/withdraw", async (req, res) => {
  */
 async function getStarknetBoundL1Pool(provider, poolAddress) {
   const slot = snHash.starknetKeccak("l1_pool").toString(16);
-  const raw = await provider.getStorageAt(poolAddress, `0x${slot}`);
+  // Retry so a transient RPC blip (Infura throws -32603 under load) does not
+  // fail-close the whole destination: a single throw here leaves `l1PoolMatches`
+  // null, which the UI renders as "STARKNET DISABLED — unreachable". Pin to
+  // `latest` rather than the default `pending`: `l1_pool` is immutable so they
+  // agree, and some nodes (Alchemy v0.10) reject `pending` with -32602.
+  const raw = await withRetry(() => provider.getStorageAt(poolAddress, `0x${slot}`, "latest"));
   return BigInt(raw);
+}
+
+function cachedStarknetBoundL1Pool(provider, config) {
+  return rpcRuntime.cachedRead(
+    `starknet-bound-l1:${config.chainId}:${config.poolAddress.toLowerCase()}`,
+    () => getStarknetBoundL1Pool(provider, config.poolAddress),
+  );
+}
+
+function getStarknetScope(provider, config) {
+  return rpcRuntime.cachedRead(
+    `starknet-scope:${config.chainId}:${config.poolAddress.toLowerCase()}`,
+    async () => {
+      const [low, high] = await withRetry(() => provider.callContract({
+        contractAddress: config.poolAddress,
+        entrypoint: "scope",
+        calldata: [],
+      }));
+      return fromU256(low, high);
+    },
+  );
+}
+
+function getStarknetRoot(provider, config) {
+  return rpcRuntime.cachedRead(
+    `starknet-root:${config.chainId}:${config.poolAddress.toLowerCase()}`,
+    async () => {
+      const [low, high] = await withRetry(() => provider.callContract({
+        contractAddress: config.poolAddress,
+        entrypoint: "current_root",
+        calldata: [],
+      }));
+      return fromU256(low, high);
+    },
+    { maxAgeMs: Number(process.env.RPC_HEAD_TTL_MS ?? 2500) },
+  );
 }
 
 app.get("/api/starknet/config", async (_req, res) => {
@@ -599,7 +811,8 @@ app.get("/api/starknet/config", async (_req, res) => {
   let boundL1Pool = null;
   let l1PoolMatches = null; // null = could not determine
   try {
-    boundL1Pool = await getStarknetBoundL1Pool(getStarknetProvider(config), config.poolAddress);
+    const provider = getStarknetProvider(config);
+    boundL1Pool = await cachedStarknetBoundL1Pool(provider, config);
     const ours = process.env.POOL_ADDRESS ? BigInt(process.env.POOL_ADDRESS) : null;
     l1PoolMatches = ours !== null ? boundL1Pool === ours : null;
   } catch (error) {
@@ -633,35 +846,76 @@ const fromU256 = (low, high) => BigInt(low) + (BigInt(high) << 128n);
  */
 async function getStarknetEvents(provider, poolAddress, eventName) {
   const selector = snHash.getSelectorFromName(eventName);
-  const out = [];
-  let token;
-  do {
-    const page = await withRetry(() => provider.getEvents({
-      address: poolAddress,
-      keys: [[selector]],
-      from_block: { block_number: Number(process.env.STARKNET_DEPLOYMENT_BLOCK ?? 0) },
-      to_block: "latest",
-      chunk_size: 100,
-      ...(token ? { continuation_token: token } : {}),
-    }));
-    // starknet.js hands back the bare RPC `result`, so a throttled/degraded node yields `undefined`
-    // rather than throwing — which surfaced as "Cannot read properties of undefined (reading
-    // 'events')" from deep inside a Promise.all, naming neither the node nor the event.
-    if (!page) {
-      throw new Error(
-        `Starknet RPC returned no result for ${eventName} on ${poolAddress}; the node is likely ` +
-        `throttling. Check STARKNET_RPC_URL and STARKNET_DEPLOYMENT_BLOCK.`,
-      );
-    }
-    for (const event of page.events ?? []) {
-      out.push({
-        commitment: fromU256(event.keys[1], event.keys[2]),
-        value: fromU256(event.data[0], event.data[1]),
+  const config = getStarknetConfig();
+  const events = await starknetEventIndex.read({
+    rpcUrl: config.rpcUrl,
+    provider,
+    address: poolAddress,
+    eventName,
+    selector,
+    fromBlock: Number(process.env.STARKNET_DEPLOYMENT_BLOCK ?? 0),
+  });
+  return events.map((event) => ({
+    commitment: fromU256(event.keys[1], event.keys[2]),
+    value: fromU256(event.data[0], event.data[1]),
+  }));
+}
+
+/** Public events contain everything needed to activate; no recipient key material is involved. */
+async function refreshEvmAutomaticActivations(chain) {
+  const client = evmClient(chain.chainId, chain.rpcUrl);
+  const [received, activated, activatedSupply, tokensReceived] = await Promise.all([
+    readEvmL2CommitmentEvents(chain, noteReceivedEvent, "NoteReceived(uint256,uint256)"),
+    readEvmL2CommitmentEvents(chain, noteActivatedEvent, "NoteActivated(uint256,uint256)"),
+    client.readContract({ address: chain.poolAddress, abi: l2BackingAbi, functionName: "activatedSupply" }),
+    client.readContract({ address: chain.poolAddress, abi: l2BackingAbi, functionName: "tokensReceivedFromBridge" }),
+  ]);
+  const planned = planBackedActivations({ received, activated, activatedSupply, tokensReceived });
+  if (!planned.length) return;
+
+  const interactions = getSdk().createContractInstance(
+    chain.rpcUrl,
+    evmL2Chain(chain),
+    chain.poolAddress,
+    chain.relayerKey,
+  );
+  for (const note of planned) {
+    await l2TransactionQueue.run(evmSignerQueueKey(chain), async () => {
+      const transaction = await interactions.activateNote(chain.poolAddress, note.commitment);
+      const receipt = await client.waitForTransactionReceipt({ hash: transaction.hash });
+      if (receipt.status !== "success") throw new Error(`activation transaction ${transaction.hash} reverted`);
+      console.log(`[l2-auto-activate] ${chain.chainName} activated ${note.commitment} (${transaction.hash})`);
+    });
+  }
+}
+
+async function refreshStarknetAutomaticActivations(config) {
+  const provider = getStarknetProvider(config);
+  const [received, activated, tokenParts] = await Promise.all([
+    getStarknetEvents(provider, config.poolAddress, "NoteReceived"),
+    getStarknetEvents(provider, config.poolAddress, "NoteActivated"),
+    withRetry(() => provider.callContract({
+      contractAddress: config.poolAddress,
+      entrypoint: "tokens_received_from_bridge",
+    })),
+  ]);
+  const tokensReceived = fromU256(tokenParts[0], tokenParts[1]);
+  const activatedSupply = activated.reduce((total, event) => total + event.value, 0n);
+  const planned = planBackedActivations({ received, activated, activatedSupply, tokensReceived });
+  if (!planned.length) return;
+
+  const account = new Account(provider, config.relayerAddress, config.privateKey);
+  for (const note of planned) {
+    await l2TransactionQueue.run(starknetSignerQueueKey(config), async () => {
+      const response = await account.execute({
+        contractAddress: config.poolAddress,
+        entrypoint: "activate_note",
+        calldata: starknetU256(note.commitment),
       });
-    }
-    token = page.continuation_token;
-  } while (token);
-  return out;
+      await provider.waitForTransaction(response.transaction_hash);
+      console.log(`[l2-auto-activate] ${config.chainName} activated ${note.commitment} (${response.transaction_hash})`);
+    });
+  }
 }
 
 /**
@@ -684,28 +938,21 @@ app.get("/api/starknet/index", async (_req, res) => {
     return sendJson(res, { configured: false, candidates: [], proofs: [] });
   }
   try {
-    const l1ChainId = Number(process.env.CHAIN_ID ?? 1);
-    const startBlock = BigInt(process.env.DEPLOYMENT_BLOCK ?? "0");
-    const l1Data = new DataService([{ chainId: l1ChainId, privacyPoolAddress: l1Pool, startBlock, rpcUrl: l1Rpc }]);
-
     const provider = getStarknetProvider(config);
-    const [deliveries, received, activated] = await Promise.all([
+    const [deliveries, received, activated, scope] = await Promise.all([
       // Stealth material — emitted on L1 regardless of destination chain.
-      l1Data.getL2Notes({ chainId: l1ChainId, address: l1Pool, scope: 0n, deploymentBlock: startBlock }),
+      readL1L2Notes(),
       getStarknetEvents(provider, config.poolAddress, "NoteReceived"),
       getStarknetEvents(provider, config.poolAddress, "NoteActivated"),
+      getStarknetScope(provider, config),
     ]);
 
-    const candidates = l1Data.buildScannableNotes(deliveries, received);
-    const tree = l1Data.reconstructL2StateTree(activated);
-
-    const [scopeLow, scopeHigh] = await provider.callContract({
-      contractAddress: config.poolAddress, entrypoint: "scope", calldata: [],
-    });
+    const candidates = buildScannableNotes(deliveries, received);
+    const tree = reconstructL2StateTree(activated);
 
     return sendJson(res, {
       configured: true,
-      scope: fromU256(scopeLow, scopeHigh),
+      scope,
       stateRoot: tree.root ?? 0n,
       candidates,
       proofs: activated.map((event) => {
@@ -729,17 +976,28 @@ app.get("/api/starknet/status/:commitment", async (req, res) => {
   if (!config.rpcUrl || !config.poolAddress) return res.status(503).json({ error: "Starknet destination is not configured" });
   try {
     const provider = getStarknetProvider(config);
-    const [pendingLow, pendingHigh] = await provider.callContract({
-      contractAddress: config.poolAddress,
-      entrypoint: "pending_value",
-      calldata: starknetU256(req.params.commitment),
-    });
+    const commitment = BigInt(req.params.commitment);
+    const [[pendingLow, pendingHigh], root, scope, receivedEvents, activatedEvents] = await Promise.all([
+      withRetry(() => provider.callContract({
+        contractAddress: config.poolAddress,
+        entrypoint: "pending_value",
+        calldata: starknetU256(commitment),
+      })),
+      getStarknetRoot(provider, config),
+      getStarknetScope(provider, config),
+      getStarknetEvents(provider, config.poolAddress, "NoteReceived"),
+      getStarknetEvents(provider, config.poolAddress, "NoteActivated"),
+    ]);
     const pendingValue = BigInt(pendingLow) + (BigInt(pendingHigh) << 128n);
-    const [rootLow, rootHigh] = await provider.callContract({ contractAddress: config.poolAddress, entrypoint: "current_root", calldata: [] });
-    const [scopeLow, scopeHigh] = await provider.callContract({ contractAddress: config.poolAddress, entrypoint: "scope", calldata: [] });
-    const root = BigInt(rootLow) + (BigInt(rootHigh) << 128n);
-    const scope = BigInt(scopeLow) + (BigInt(scopeHigh) << 128n);
-    return res.json({ received: pendingValue > 0n, pendingValue: pendingValue.toString(), currentRoot: root.toString(), scope: scope.toString(), state: pendingValue > 0n ? "received-pending-activation" : "bridge-pending" });
+    const received = receivedEvents.some((event) => event.commitment === commitment);
+    const activated = activatedEvents.some((event) => event.commitment === commitment);
+    return res.json({
+      received,
+      pendingValue: pendingValue.toString(),
+      currentRoot: root.toString(),
+      scope: scope.toString(),
+      state: activated ? "activated" : pendingValue > 0n ? "received-pending-activation" : "bridge-pending",
+    });
   } catch (error) {
     return res.status(502).json({ error: error instanceof Error ? error.message : "Unable to read Starknet status" });
   }
@@ -751,7 +1009,11 @@ app.post("/api/starknet/activate", async (req, res) => {
   try {
     const provider = getStarknetProvider(config);
     const account = new Account(provider, config.relayerAddress, config.privateKey);
-    const response = await account.execute({ contractAddress: config.poolAddress, entrypoint: "activate_note", calldata: starknetU256(req.body.commitment) });
+    const response = await l2TransactionQueue.run(starknetSignerQueueKey(config), async () => {
+      const submitted = await account.execute({ contractAddress: config.poolAddress, entrypoint: "activate_note", calldata: starknetU256(req.body.commitment) });
+      await provider.waitForTransaction(submitted.transaction_hash);
+      return submitted;
+    });
     return res.json({ hash: response.transaction_hash });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Starknet activation failed" });
@@ -821,7 +1083,11 @@ app.post("/api/starknet/withdraw", async (req, res) => {
       proofCalldata.length.toString(),
       ...proofCalldata.map(String),
     ];
-    const response = await account.execute({ contractAddress: config.poolAddress, entrypoint: "withdraw", calldata });
+    const response = await l2TransactionQueue.run(starknetSignerQueueKey(config), async () => {
+      const submitted = await account.execute({ contractAddress: config.poolAddress, entrypoint: "withdraw", calldata });
+      await provider.waitForTransaction(submitted.transaction_hash);
+      return submitted;
+    });
     return res.json({ hash: response.transaction_hash });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Starknet withdrawal failed" });
@@ -896,4 +1162,27 @@ app.post("/api/relay", async (req, res) => {
   }
 });
 
-app.listen(port, () => console.log(`F5 API listening on :${port}`));
+function automaticActivationDestinations() {
+  if (process.env.L2_AUTO_ACTIVATE === "false") return [];
+  const evm = getEvmL2s()
+    .filter((chain) => chain.relayerKey && chain.chainId > 0)
+    .map((chain) => ({ id: `evm:${chain.key}`, label: chain.chainName, family: "evm", chain }));
+  const starknet = getStarknetConfig();
+  if (starknet.rpcUrl && starknet.poolAddress && starknet.relayerAddress && starknet.privateKey) {
+    evm.push({ id: "starknet", label: starknet.chainName, family: "starknet", config: starknet });
+  }
+  return evm;
+}
+
+const automaticNoteActivator = new AutomaticNoteActivator({
+  getDestinations: automaticActivationDestinations,
+  refresh: (destination) => destination.family === "evm"
+    ? refreshEvmAutomaticActivations(destination.chain)
+    : refreshStarknetAutomaticActivations(destination.config),
+  intervalMs: Number(process.env.L2_AUTO_ACTIVATE_POLL_MS ?? 10_000),
+});
+
+app.listen(port, () => {
+  console.log(`F5 API listening on :${port}`);
+  automaticNoteActivator.start();
+});

@@ -37,7 +37,7 @@ by reading `L1_POOL()`. Do not skip it.
 | --- | --- | --- |
 | `foundry` (`forge`, `cast`) | L1 + EVM-L2 deploys, on-chain checks | `foundryup` |
 | `jq` | reading deploy records | `brew install jq` |
-| `sncast` (Starknet Foundry) | Cairo pool deploy | pins JSON-RPC spec 0.10.x — see [§5.3](#53-starknet-sepolia) |
+| `sncast` (Starknet Foundry) | Cairo pool deploy | pins JSON-RPC spec 0.10.x — see [§5.4](#54-starknet-sepolia) |
 | `yarn` + Node | app, relayer, circuits | repo uses Yarn workspaces |
 | `python3` | Starknet deploy script internals | already required by `deploy-starknet.sh` |
 
@@ -121,7 +121,27 @@ yarn deploy:l2:base-sepolia --broadcast
 yarn configure:bridge:base-sepolia --broadcast
 ```
 
-### 5.3 Starknet Sepolia
+### 5.3 Arbitrum Sepolia
+
+Arbitrum is EVM but **not** OP-Stack: it delivers L1→L2 messages as retryable tickets (no messenger)
+and prepays L2 execution up front. So it uses its own pool and its own config script, and the
+`ARB_SEPOLIA_*` block carries the retryable gas/fee terms (Inbox, L1 Gateway Router,
+`MESSAGE_GAS_LIMIT`, `MESSAGE_MAX_FEE_PER_GAS`, `MESSAGE_SUBMISSION_COST`; ERC20 destinations add the
+matching `TOKEN_*` terms and `L2_TOKEN_ADDRESS`). Pad the fee terms — Arbitrum's are dynamic, and an
+under-provisioned ticket fails to auto-redeem (the pool refunds any unused prepaid `msg.value`).
+
+```bash
+cd packages/contracts
+# fund the deployer with Arbitrum Sepolia ETH first (deploy costs ~0.00011 ETH)
+yarn deploy:l2:arb-sepolia --broadcast               # deploys L2PrivacyPoolArbitrum (alias auth, no messenger)
+# copy the emitted pool address into ARB_SEPOLIA_L2_POOL_ADDRESS, then:
+yarn configure:bridge:arb-sepolia --broadcast        # sets BridgeConfig{kind: Arbitrum} on the Entrypoint
+```
+
+See [`ARBITRUM_SUPPORT.md`](./ARBITRUM_SUPPORT.md) for the full Arbitrum architecture, fee model, and
+verified canonical endpoints.
+
+### 5.4 Starknet Sepolia
 
 The Cairo pool is deployed with `sncast`, not Foundry. Its inputs live in
 `packages/starknet-pool/.env` (`SN_ACCOUNT`, `SN_RPC`, `L1_POOL_ADDRESS`, `SN_ASSET_ADDRESS`).
@@ -165,6 +185,7 @@ Start from `app/.env.sepolia.example`. Set from the L1 record: `POOL_ADDRESS`, `
 | Var | Source |
 | --- | --- |
 | `L2_EVM_CHAINS` | comma list of EVM keys to advertise, e.g. `op,base` |
+| `L2_AUTO_ACTIVATE` / `L2_AUTO_ACTIVATE_POLL_MS` | `true` / polling interval (default `10000` ms); activates backed notes from public events without recipient involvement |
 | `OP_POOL_ADDRESS` / `OP_DEPLOYMENT_BLOCK` / `OP_CHAIN_ID` / `OP_RPC_URL` | OP record |
 | `OP_RELAYER_PRIVATE_KEY` | funded OP account (submits the OP leg) |
 | `BASE_*` (same shape) | Base record |
