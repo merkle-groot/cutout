@@ -260,3 +260,133 @@
   .note-map{padding:12px}
 }
 @media(prefers-reduced-motion:reduce){.action-route-motion{animation:none;stroke-dasharray:none}}
+
+/*//////////////////////////////////////////////////////////////
+                  HYBRID BENTO VAULT — 2026 REFRESH
+//////////////////////////////////////////////////////////////*/
+
+/* The unlocked vault is one framed object with a compact desktop rail. */
+.vault-frame{width:calc(100% - 48px);max-width:1190px;margin:30px auto 56px;background:var(--cream);border:2px solid var(--ink);box-shadow:10px 10px 0 var(--ink)}
+.vault-frame>.topbar{height:84px;padding:0 26px;border-bottom:2px solid var(--ink);background:var(--paper)}
+.vault-frame .brand{gap:13px;font-size:25px}
+.vault-frame .brand-mark{width:45px;height:45px}
+.vault-frame .tag{border-width:2px;box-shadow:4px 4px 0 var(--ink);padding:8px 13px;font-size:13px}
+.vault-frame .wallet button{border-width:2px;box-shadow:4px 4px 0 var(--ink);padding:11px 15px;font:700 12px 'DM Mono'}
+.vault-frame .network{font-size:12px}
+.vault-frame .dot{width:11px;height:11px;border-width:2px;margin-right:7px}
+
+.vault-frame .app-shell{max-width:none;display:flex;flex-direction:column;gap:22px;padding:24px;align-items:stretch}
+.vault-primary-grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(310px,1fr);grid-template-areas:"workspace balance" "workspace notes";gap:22px;align-items:start}
+.vault-frame .workspace-main{grid-area:workspace;display:flex;flex-direction:column;gap:22px;min-width:0}
+.vault-frame .panel{border-width:2px;box-shadow:7px 7px 0 var(--ink)}
+
+/* Balance and the three primary routes lead the compact right rail. */
+.vault-summary{grid-area:balance;display:flex;flex-direction:column;gap:20px;padding:22px;background:var(--yellow)}
+.vault-summary .balance-card{border:0;box-shadow:none;padding:0;background:transparent}
+.vault-summary .big-balance{font-size:42px;margin-top:5px}
+.vault-summary .balance-sub{gap:8px;flex-wrap:wrap;margin-top:12px}
+.vault-summary .balance-sub span{border:1px solid var(--ink);padding:5px 8px;color:var(--ink);text-transform:uppercase;font-size:9px}
+.vault-summary .vault-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.vault-summary .vault-actions .primary{grid-column:1/-1;background:var(--ink);color:var(--yellow);border-width:2px;box-shadow:4px 4px 0 #735f0d;padding:16px;font-size:14px;text-align:right}
+.vault-summary .vault-actions .secondary-btn{border-width:2px;box-shadow:4px 4px 0 var(--ink);padding:12px 9px;font-size:10px}
+.vault-summary .vault-actions .emergency-action{grid-column:1/-1;background:var(--orange);letter-spacing:1px}
+
+/* Keep the map readable without letting it grow into a full-page illustration. */
+.vault-frame .home-panel{padding:27px 25px 22px}
+.vault-frame .map-heading{margin-bottom:18px;align-items:flex-start}
+.vault-frame .map-heading h2{font-size:36px}
+.vault-frame .map-heading p{margin-top:7px;font:500 11px 'DM Mono'}
+.vault-frame .map-total strong{font-size:28px}
+.vault-frame .note-map{margin-bottom:18px;border-width:2px;box-shadow:none;padding:12px;background:#fbf7ed}
+.vault-frame .note-map svg{width:min(100%,760px);min-width:0;margin-inline:auto}
+.vault-frame .map-legend{margin:0 0 14px}
+.vault-frame .micro{margin-top:12px}
+
+/* Notes fills the second rail tile, with every route visible even at zero balance. */
+.vault-notes-tile{grid-area:notes;padding:20px 18px 18px;background:var(--paper);min-width:0}
+.vault-notes-tile .notes-heading{border:0;padding:0 0 14px;align-items:flex-start}
+.vault-notes-tile .notes-heading h2{font-size:21px}
+.vault-notes-tile .notes-heading p{margin:7px 0 0;color:#555;font:500 11px 'DM Mono'}
+.notes-heading-actions{display:flex;align-items:center;justify-content:flex-start;gap:12px;flex-wrap:wrap}
+.vault-notes-tile .notes-heading{flex-direction:column}
+.vault-notes-tile .unlock{border:2px solid var(--ink);box-shadow:3px 3px 0 var(--ink);background:var(--yellow);padding:9px 15px;font:700 10px 'DM Mono';letter-spacing:1px}
+.vault-notes-tile .route-scan{margin:0 0 16px;border-width:2px;background:var(--teal);box-shadow:5px 5px 0 var(--ink)}
+.vault-notes-tile .route-scan-head{border-bottom-width:2px;background:transparent;padding:11px 13px}
+.vault-notes-tile .route-scan-list{display:grid;grid-template-columns:1fr;background:var(--paper)}
+.vault-notes-tile .route-scan-step{border:0;border-right:1px solid var(--ink);border-bottom:1px solid var(--ink)}
+.route-summary-grid{display:grid;grid-template-columns:1fr;gap:8px}
+.route-summary{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--ink);padding:10px;background:var(--paper)}
+.route-summary span{min-width:0}
+.route-summary b,.route-summary small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.route-summary b{font:700 10px 'DM Mono'}
+.route-summary small{margin-top:4px;color:#666;font:9px 'DM Mono'}
+.route-summary>strong{flex:none;font:700 9px 'DM Mono'}
+.note-detail-heading{margin-top:18px}
+.vault-notes-tile .group-heading{border-bottom-width:2px}
+.vault-notes-tile .vnote{border-width:2px}
+
+/* Public identity is the final full-width tile. */
+.vault-address-tile{padding:24px 22px 22px;background:var(--paper)}
+.vault-address-tile .identity-strip .card-heading h2{font-size:20px}
+.vault-address-tile .identity-copy{max-width:720px;margin:8px 0 18px}
+.vault-address-tile .online{border-width:2px;padding:8px 11px;font-size:9px}
+.shielded-key-list{display:flex;flex-direction:column;gap:10px}
+.shielded-key-row{display:grid;grid-template-columns:112px minmax(0,1fr) 58px;gap:12px;align-items:center;min-height:48px;border:2px solid var(--ink);padding:8px 10px;background:#fbf7ed}
+.shielded-key-row>span{color:#666;font:500 9px 'DM Mono';letter-spacing:1.5px}
+.shielded-key-row code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 11px 'DM Mono'}
+.shielded-key-row button{border:1px solid var(--ink);background:var(--paper);padding:6px 8px;font:700 8px 'DM Mono';letter-spacing:1px}
+.shielded-key-row button:hover{background:var(--yellow)}
+.vault-address-actions{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:18px;padding-top:18px;border-top:2px solid var(--ink)}
+.vault-address-actions .secondary-btn{border-width:2px;box-shadow:4px 4px 0 var(--ink);padding:13px}
+.vault-address-actions .secondary-btn:disabled{box-shadow:none;border-style:dashed;background:transparent;color:#888;cursor:not-allowed}
+
+/* Ragequit is intentionally visually separate from ordinary private flows. */
+.ragequit-panel{border-color:#8f2017;background:#fff8f0}
+.ragequit-panel .flow-head{border-bottom-color:#8f2017}
+.ragequit-warning{border:4px solid var(--ink);box-shadow:7px 7px 0 #8f2017;padding:20px}
+.ragequit-account{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:stretch;margin:22px 0}
+.ragequit-account>span{display:flex;min-width:0;flex-direction:column;gap:7px;border:2px solid var(--ink);padding:12px;background:var(--paper)}
+.ragequit-account b{font:700 9px 'DM Mono';letter-spacing:1px;color:#666}
+.ragequit-account code{overflow:hidden;text-overflow:ellipsis;font:500 11px 'DM Mono'}
+.ragequit-account .secondary-btn{margin:0;box-shadow:4px 4px 0 var(--ink)}
+.emergency-note{background:#fff2e2}
+.pill.danger{background:var(--orange)}
+.address-mismatch code{color:inherit}
+.ragequit-confirm{align-items:flex-start;border:3px solid var(--ink);padding:16px;background:var(--yellow);line-height:1.5}
+.danger-action{background:var(--orange)!important;color:var(--ink)!important}
+
+.vault-frame+footer{width:calc(100% - 48px);max-width:1190px;margin:-28px auto 0;border:2px solid var(--ink);background:var(--paper)}
+
+@media(max-width:1460px){
+  .vault-frame{margin-top:24px;margin-bottom:54px}
+  .vault-frame+footer{margin-top:-30px}
+}
+@media(max-width:1050px){
+  .vault-frame .topbar{height:auto;padding:18px 22px}
+  .vault-frame .topbar .wallet{margin-left:auto}
+  .vault-primary-grid{grid-template-columns:1fr;grid-template-areas:"balance" "workspace" "notes"}
+  .vault-summary .vault-actions{max-width:none}
+  .vault-notes-tile{padding:24px 22px 22px}
+  .vault-notes-tile .notes-heading{flex-direction:row}
+  .notes-heading-actions{justify-content:flex-end}
+  .route-summary-grid,.vault-notes-tile .route-scan-list{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:650px){
+  .vault-frame{width:calc(100% - 24px);margin-top:12px;margin-bottom:42px;box-shadow:6px 6px 0 var(--ink)}
+  .vault-frame>.topbar{padding:14px 16px}
+  .vault-frame .brand{font-size:22px}
+  .vault-frame .app-shell{gap:16px;padding:14px}
+  .vault-primary-grid{gap:16px}
+  .vault-summary,.vault-notes-tile,.vault-address-tile,.vault-frame .home-panel{padding:18px}
+  .vault-summary .vault-actions{grid-template-columns:1fr}
+  .vault-summary .vault-actions .primary{grid-column:auto}
+  .route-summary-grid,.vault-notes-tile .route-scan-list{grid-template-columns:1fr}
+  .notes-heading-actions{justify-content:flex-start}
+  .vault-notes-tile .notes-heading{flex-direction:column;gap:14px}
+  .vault-frame .note-map svg{width:680px;min-width:680px}
+  .shielded-key-row{grid-template-columns:1fr 54px;gap:7px}
+  .shielded-key-row>span{grid-column:1/-1}
+  .vault-address-actions{grid-template-columns:1fr}
+  .ragequit-account{grid-template-columns:1fr}
+  .vault-frame+footer{width:calc(100% - 24px);margin-top:-22px}
+}

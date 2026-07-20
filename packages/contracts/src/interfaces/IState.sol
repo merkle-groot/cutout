@@ -42,11 +42,6 @@ interface IState {
   error NullifierAlreadySpent();
 
   /**
-   * @notice Thrown when trying to initiate the ragequitting process of a commitment before the waiting period
-   */
-  error NotYetRagequitteable();
-
-  /**
    * @notice Thrown when the max tree depth is reached and no more commitments can be inserted
    */
   error MaxTreeDepthReached();
@@ -57,7 +52,7 @@ interface IState {
   error ZeroAddress();
 
   /*///////////////////////////////////////////////////////////////
-                              VIEWS 
+                              VIEWS
   //////////////////////////////////////////////////////////////*/
 
   /**

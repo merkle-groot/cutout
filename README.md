@@ -33,3 +33,9 @@ To set up the development environment:
 # Install dependencies
 yarn
 ```
+
+## Emergency ragequit
+
+Ragequit is the L1 pool's emergency exit for a depositor whose note cannot use the normal ASP-approved withdrawal path. It is not a private withdrawal: the transaction publicly links the original deposit address, the commitment, and the amount returned.
+
+Only the EOA that originally deposited the note may call `ragequit`, and that same address must pay the L1 gas. A relayer cannot submit it because the pool checks `msg.sender` against the depositor recorded for the note's label. A successful ragequit is irreversible and burns the note's nullifier. It remains available after the pool is wound down so depositors retain an exit of last resort.

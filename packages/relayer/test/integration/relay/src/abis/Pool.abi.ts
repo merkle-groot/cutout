@@ -520,11 +520,6 @@ export const abi = [
   },
   {
     "type": "error",
-    "name": "NotYetRagequitteable",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "NullifierAlreadySpent",
     "inputs": []
   },

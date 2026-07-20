@@ -15,8 +15,8 @@ import {UnsafeUpgrades} from '@upgrades/Upgrades.sol';
 import {IntegrationUtils} from './Utils.sol';
 import {IERC20} from '@oz/interfaces/IERC20.sol';
 
-import {ProofLib} from 'contracts/lib/ProofLib.sol';
 import {InternalLeanIMT, LeanIMTData} from '@zk-kit/lean-imt.sol/InternalLeanIMT.sol';
+import {ProofLib} from 'contracts/lib/ProofLib.sol';
 
 import {PoseidonT2} from 'poseidon/PoseidonT2.sol';
 import {PoseidonT3} from 'poseidon/PoseidonT3.sol';
@@ -29,7 +29,7 @@ contract IntegrationBase is IntegrationUtils {
   using InternalLeanIMT for LeanIMTData;
 
   /*///////////////////////////////////////////////////////////////
-                      STATE VARIABLES 
+                      STATE VARIABLES
   //////////////////////////////////////////////////////////////*/
 
   uint256 internal constant _FORK_BLOCK = 18_920_905;
@@ -116,10 +116,7 @@ contract IntegrationBase is IntegrationUtils {
         abi.encodePacked(
           type(PrivacyPool).creationCode,
           abi.encode(
-            address(_entrypoint),
-            address(_withdrawalVerifier),
-            address(_commitmentVerifier),
-            Constants.NATIVE_ASSET
+            address(_entrypoint), address(_withdrawalVerifier), address(_commitmentVerifier), Constants.NATIVE_ASSET
           )
         )
       )
@@ -152,7 +149,7 @@ contract IntegrationBase is IntegrationUtils {
   }
 
   /*///////////////////////////////////////////////////////////////
-                           DEPOSIT 
+                           DEPOSIT
   //////////////////////////////////////////////////////////////*/
 
   function _deposit(DepositParams memory _params) internal returns (Commitment memory _commitment) {
@@ -210,10 +207,9 @@ contract IntegrationBase is IntegrationUtils {
     assertEq(
       _balance(_params.depositor, _params.asset), _depositorInitialBalance - _params.amount, 'User balance mismatch'
     );
-    assertEq(
-      _balance(address(_entrypoint), _params.asset), _entrypointInitialBalance, 'Entrypoint balance mismatch'
-    );
-    assertEq(_balance(address(_pool), _params.asset), _poolInitialBalance + _commitment.value, 'Pool balance mismatch');
+    assertEq(_balance(address(_entrypoint), _params.asset), _entrypointInitialBalance, 'Entrypoint balance mismatch');
+    // The pool retains both the net commitment value and the accrued vetting fee.
+    assertEq(_balance(address(_pool), _params.asset), _poolInitialBalance + _params.amount, 'Pool balance mismatch');
 
     // Check deposit stored values
     address _depositor = _pool.depositors(_commitment.label);
@@ -318,7 +314,7 @@ contract IntegrationBase is IntegrationUtils {
 
     if (_params.revertReason == NONE) {
       // Check nullifier hash has been spent
-      assertTrue(_pool.nullifierHashes(_proof.pubSignals[1]), 'Existing nullifier hash must be spent');
+      assertTrue(_pool.nullifierHashes(ProofLib.existingNullifierHash(_proof)), 'Existing nullifier hash must be spent');
 
       // Insert new commitment in mirrored state tree
       _insertIntoShadowMerkleTree(_commitment.hash);

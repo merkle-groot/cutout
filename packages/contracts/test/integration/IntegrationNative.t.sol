@@ -4,8 +4,21 @@ pragma solidity 0.8.28;
 import {IntegrationBase} from './IntegrationBase.sol';
 import {InternalLeanIMT, LeanIMTData} from '@zk-kit/lean-imt.sol/InternalLeanIMT.sol';
 
+import {ProofLib} from 'contracts/lib/ProofLib.sol';
+import {IEntrypoint} from 'interfaces/IEntrypoint.sol';
 import {IPrivacyPool} from 'interfaces/IPrivacyPool.sol';
 import {IState} from 'interfaces/IState.sol';
+
+contract RagequitMockMessenger {
+  function sendMessage(address, bytes calldata, uint32) external payable {}
+}
+
+contract RagequitMockStandardBridge {
+  function bridgeETHTo(address _to, uint32, bytes calldata) external payable {
+    (bool _success,) = payable(_to).call{value: msg.value}('');
+    require(_success, 'Bridge delivery failed');
+  }
+}
 
 contract IntegrationNative is IntegrationBase {
   using InternalLeanIMT for LeanIMTData;
@@ -296,6 +309,22 @@ contract IntegrationNative is IntegrationBase {
   }
 
   /**
+   * @notice Ragequit remains available after wind-down because it is the pool's emergency exit
+   */
+  function test_ragequitAfterWindDown() public {
+    _commitment = _deposit(
+      DepositParams({depositor: _ALICE, asset: _ETH, amount: 100 ether, nullifier: 'nullifier_1', secret: 'secret_1'})
+    );
+
+    vm.prank(_OWNER);
+    _entrypoint.windDownPool(IPrivacyPool(address(_ethPool)));
+    assertTrue(_ethPool.dead(), 'Pool should be dead');
+
+    _ragequit(_ALICE, _commitment);
+    assertTrue(_ethPool.dead(), 'Pool should remain dead');
+  }
+
+  /**
    * @notice Test that users can get approved by the ASP, make a partial withdrawal, and if removed from the ASP set, they can only ragequit
    */
   function test_aspRemoval() public {
@@ -340,6 +369,68 @@ contract IntegrationNative is IntegrationBase {
 
     // Ragequit
     _ragequit(_ALICE, _commitment);
+  }
+
+  /**
+   * @notice A partial withdrawal's L1 change note keeps the deposit label and can be ragequit by the original depositor
+   */
+  function test_ragequitChangeNoteAfterPartialWithdrawal() public {
+    Commitment memory _parent = _deposit(
+      DepositParams({depositor: _ALICE, asset: _ETH, amount: 100 ether, nullifier: 'nullifier_1', secret: 'secret_1'})
+    );
+
+    RagequitMockMessenger _messenger = new RagequitMockMessenger();
+    RagequitMockStandardBridge _bridge = new RagequitMockStandardBridge();
+    IEntrypoint.BridgeConfig memory _bridgeConfig = IEntrypoint.BridgeConfig({
+      kind: IEntrypoint.BridgeKind.OpStack,
+      isSupported: true,
+      l1Messenger: address(_messenger),
+      l1TokenBridge: address(_bridge),
+      l2Pool: _BOB,
+      l2PoolFelt: 0,
+      l2Handler: 0,
+      l2Token: _BOB,
+      messageGasLimit: 100_000,
+      messageMaxFeePerGas: 0,
+      messageFee: 0,
+      tokenGasLimit: 100_000,
+      tokenMaxFeePerGas: 0,
+      tokenFee: 0
+    });
+    vm.prank(_OWNER);
+    _entrypoint.setBridgeConfig(0, address(_ETH), _bridgeConfig);
+
+    vm.prank(_POSTMAN);
+    _entrypoint.updateRoot(_shadowASPMerkleTree._root(), 'ipfs_cid_ipfs_cid_ipfs_cid_ipfs_cid_ipfs_cid_ipfs_cid');
+
+    Commitment memory _change = _withdrawThroughRelayer(
+      WithdrawalParams({
+        withdrawnAmount: 40 ether,
+        newNullifier: 'nullifier_2',
+        newSecret: 'secret_2',
+        recipient: _BOB,
+        commitment: _parent,
+        revertReason: NONE
+      })
+    );
+
+    uint256 _parentNullifierHash = _hashNullifier(_parent.nullifier);
+    uint256 _changeNullifierHash = _hashNullifier(_change.nullifier);
+    assertTrue(_ethPool.nullifierHashes(_parentNullifierHash), 'Parent nullifier must remain spent');
+    assertFalse(_ethPool.nullifierHashes(_changeNullifierHash), 'Change nullifier must start unspent');
+    assertEq(_change.value, _parent.value - 40 ether, 'Incorrect change-note value');
+
+    // The spent parent remains in the state tree, but its burned nullifier prevents a second exit.
+    ProofLib.RagequitProof memory _parentProof =
+      _generateRagequitProof(_parent.value, _parent.label, _parent.nullifier, _parent.secret);
+    vm.prank(_ALICE);
+    vm.expectRevert(IState.NullifierAlreadySpent.selector);
+    _ethPool.ragequit(_parentProof);
+
+    _ragequit(_ALICE, _change);
+
+    assertTrue(_ethPool.nullifierHashes(_parentNullifierHash), 'Parent nullifier must stay spent');
+    assertTrue(_ethPool.nullifierHashes(_changeNullifierHash), 'Change nullifier must be spent after ragequit');
   }
 
   /**

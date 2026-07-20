@@ -34,17 +34,15 @@ echo "staging -> ${DEST}"
 stage_built withdrawL1 withdrawL1
 stage_built withdrawL2 withdrawL2
 
-# commitment (ragequit) is the odd one out: build/commitmentL1 has no groth16 setup, and the
-# zkey/vkey that DO match the deployed CommitmentVerifier live in trusted-setup (nPublic=4).
+# commitment (ragequit) is the odd one out: the zkey/vkey that match the deployed
+# CommitmentVerifier live in trusted-setup rather than build/ (nPublic=4).
 cp trusted-setup/final-keys/commitment.zkey "${DEST}/commitment.zkey"
 cp trusted-setup/final-keys/commitment.vkey "${DEST}/commitment.vkey"
-# ...but no wasm exists for that circuit. commitmentL1 is a DIFFERENT circuit (2 public inputs, not
-# 4), so this wasm does NOT pair with the key above. It is staged only because the SDK refuses to
-# initialise while any artifact 404s. Consequence: ragequit proving (proveCommitment) is broken;
-# deposit / send / withdraw are unaffected because they never touch this circuit. Fix properly by
-# either recovering the original commitment circuit's wasm or making the SDK load lazily.
+# Circom treats the template's two outputs plus the configured value/label inputs as
+# four public signals. This compiled wasm is the one used by the final ceremony key;
+# CI generates and verifies a proof with this exact artifact pair.
 cp build/commitmentL1/commitmentL1_js/commitmentL1.wasm "${DEST}/commitment.wasm"
-echo "  commitment: trusted-setup keys + commitmentL1 wasm (MISMATCHED wasm — ragequit only)"
+echo "  commitment: commitmentL1 wasm + trusted-setup keys"
 
 echo
 echo "staged $(ls -1 "${DEST}" | wc -l | tr -d ' ') files:"

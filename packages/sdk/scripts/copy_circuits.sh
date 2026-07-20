@@ -22,10 +22,9 @@ do
 done
 
 # --- Commitment circuit (ragequit path) ---
-# NOTE: the commitment circuit is mid-rename in packages/circuits (commitment ->
-# commitmentL1) and currently has no regenerated proving/verification keys or a
-# compiled `main`. We keep copying the legacy final-keys so proveCommitment keeps
-# a target; resolving the ragequit circuit is tracked separately.
+# The deployed verifier was generated from the ceremony keys below. The compiled
+# commitmentL1 wasm matches those keys; the circuits CI proves and verifies this
+# pairing so packaging cannot silently ship incompatible ragequit artifacts.
 if [ -f "$CIRCUITS_DIR/trusted-setup/final-keys/commitment.zkey" ]; then
   cp "$CIRCUITS_DIR/trusted-setup/final-keys/commitment.zkey" "$DEST_DIR/commitment.zkey"
   cp "$CIRCUITS_DIR/trusted-setup/final-keys/commitment.vkey" "$DEST_DIR/commitment.vkey"
@@ -33,7 +32,7 @@ fi
 if [ -f "$CIRCUITS_DIR/build/commitment/commitment_js/commitment.wasm" ]; then
   cp "$CIRCUITS_DIR/build/commitment/commitment_js/commitment.wasm" "$DEST_DIR/commitment.wasm"
 elif [ -f "$CIRCUITS_DIR/build/commitmentL1/commitmentL1_js/commitmentL1.wasm" ]; then
-  # Fallback: the renamed hasher (same value/label/nullifier/secret preimage).
+  # The SDK keeps the historical `commitment.*` asset names for API compatibility.
   cp "$CIRCUITS_DIR/build/commitmentL1/commitmentL1_js/commitmentL1.wasm" "$DEST_DIR/commitment.wasm"
 else
   echo "WARN: no commitment wasm found (circuit rename in progress); commitment.wasm not copied" >&2

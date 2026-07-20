@@ -96,6 +96,11 @@ cd ../.. && ./ops/check-deployment.sh --onchain
 
 ## 5. Deploy the destinations
 
+> Destination pool bytecode includes the native `BackingReceived` event. Existing
+> EVM pools deployed before this event was added must be redeployed before a
+> WebSocket-only activation worker can rely on it. Until every configured destination
+> points at the new bytecode, retain the HTTP reconciliation poll as a fallback.
+
 Each destination is deployed, then its Entrypoint bridge config is pointed at it. The per-chain
 `yarn` aliases set `L2_TARGET` and pick the matching RPC themselves — you do **not** edit
 `L2_TARGET` in `.env`. Fill the relevant prefixed block in `packages/contracts/.env`, set
@@ -144,7 +149,9 @@ verified canonical endpoints.
 ### 5.4 Starknet Sepolia
 
 The Cairo pool is deployed with `sncast`, not Foundry. Its inputs live in
-`packages/starknet-pool/.env` (`SN_ACCOUNT`, `SN_RPC`, `L1_POOL_ADDRESS`, `SN_ASSET_ADDRESS`).
+`packages/starknet-pool/.env` (`SN_ACCOUNT`, `SN_RPC`, `L1_POOL_ADDRESS`, `SN_ASSET_ADDRESS`,
+`SN_TOKEN_BRIDGE_ADDRESS`). The token bridge is immutable and authorizes StarkGate's `on_receive`
+callback, so changing it requires a fresh Cairo pool deployment.
 
 ```bash
 cd packages/starknet-pool
@@ -155,11 +162,10 @@ cd ../contracts
 yarn configure:bridge:starknet-sepolia --broadcast    # without this, the pool path reverts UnsupportedChain
 ```
 
-> **The Cairo deploy and the app need DIFFERENT Starknet RPC nodes.** They pin incompatible
-> JSON-RPC spec versions and each hard-fails on the other's endpoint. `sncast` (deploy, `SN_RPC`)
-> needs spec **0.10.x**; `starknet.js` 6.x (app, `STARKNET_RPC_URL`) needs **0.8.x**. A
-> `starknet_chainId` curl succeeds on both and will *not* catch the mismatch — verify with the
-> actual tool. Do not try to unify them.
+> **Starknet RPC compatibility:** both `sncast` (deploy, `SN_RPC`) and starknet.js 10.x (app and
+> relayer runtime) support JSON-RPC spec **0.10.x**, so they may share an endpoint. Verify
+> `starknet_specVersion` as well as `starknet_chainId`; a chain-id check alone does not prove spec
+> compatibility.
 
 After each destination:
 
@@ -319,8 +325,11 @@ These are network constants, not per-deployment — reuse them across redeploys.
 | --- | --- |
 | Starknet Core (L1) | `0xE2Bb56ee936fd6433DC0F6e7e3b8365C906AA057` |
 | StarkGate ETH bridge (L1) | `0x8453FC6Cd1bCfE8D4dFC069C400B433054d47bDc` |
+| StarkGate token bridge (L2) | `0x04c5772d1914fe6ce891b64eb35bf3522aeae1315647314aac58b01137607f3f` |
 | Chain id (felt, `SN_SEPOLIA`) | `393402133025997798000961` |
-| `receive_note` selector | `0xafb78720fe8e7dad4e1079e5a4a9ca568567c1eaad64c3c662ef968d138664` (recompute only if the handler is renamed: `starkli selector receive_note`) |
+
+Starknet uses one `depositWithMessage` call. `l1Messenger`, `l2Handler`, and `messageFee` are zero in
+the bridge config; `tokenFee` funds the combined token deposit and commitment callback.
 
 Re-verify Base's L1 addresses against the current Base Sepolia deployment before any mainnet-money use.
 

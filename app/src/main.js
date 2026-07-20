@@ -19,6 +19,14 @@ import {
   validateRecoveryPhrase,
 } from "./vault.js";
 import { runSequentialScan } from "./scan-flow.js";
+import {
+  RAGEQUIT_PATH,
+  formatRagequitProof,
+  hasRagequitConsent,
+  partitionRagequitNotes,
+  ragequitAccountKey,
+  selectRagequitNote,
+} from "./ragequit-flow.js";
 // Single-input Poseidon over BN254 — byte-identical to the circuit's/SDK's Poseidon
 // (verified), so an L1 note's `Poseidon([nullifier])` here matches the
 // `existingNullifierHash` the pool burns on spend. `poseidon-lite` is browser-native
@@ -38,10 +46,9 @@ import { poseidon1 } from "poseidon-lite/poseidon1";
  * encryption key — so it is the ONLY thing a user must back up. The note cache
  * and the L2 history are a display convenience, never a spend authority.
  *
- * Layout: when locked, a single centered onboarding card. When unlocked, a
- * two-pane workspace — the active flow on the LEFT, the persistent Vault dock
- * (identity, balance, notes across L1 + each L2 incl. spent/withdrawn) on the
- * RIGHT. Forms live in the left pane so the dock stays calm and data-only.
+ * Layout: when locked, a single centered onboarding card. When unlocked, the
+ * active workspace occupies the main column while balance/actions and notes
+ * form a compact rail. Public shielded keys and recovery controls sit below.
  */
 
 const STARKNET_CHAIN_ID = "393402133025997798000961";
@@ -51,6 +58,7 @@ const VAULT_PATHS = {
   deposit: "/vault/deposit",
   send: "/vault/bridge",
   receive: "/vault/withdraw",
+  ragequit: RAGEQUIT_PATH,
 };
 
 const REGISTRY_ABI = [
@@ -59,6 +67,19 @@ const REGISTRY_ABI = [
 ];
 const poolAbi = [
   { type: "function", name: "deposit", stateMutability: "payable", inputs: [{ name: "precommitment", type: "uint256" }], outputs: [] },
+  { type: "function", name: "depositors", stateMutability: "view", inputs: [{ name: "label", type: "uint256" }], outputs: [{ type: "address" }] },
+  { type: "function", name: "nullifierHashes", stateMutability: "view", inputs: [{ name: "nullifierHash", type: "uint256" }], outputs: [{ type: "bool" }] },
+  {
+    type: "function", name: "ragequit", stateMutability: "nonpayable", outputs: [],
+    inputs: [{
+      name: "proof", type: "tuple", components: [
+        { name: "pA", type: "uint256[2]" },
+        { name: "pB", type: "uint256[2][2]" },
+        { name: "pC", type: "uint256[2]" },
+        { name: "pubSignals", type: "uint256[4]" },
+      ],
+    }],
+  },
   {
     type: "event",
     name: "Deposited",
@@ -73,7 +94,7 @@ const poolAbi = [
 ];
 
 const state = {
-  /** Which flow occupies the left workspace: "home" | "deposit" | "send" | "receive". */
+  /** Which flow occupies the left workspace: "home" | "deposit" | "send" | "receive" | "ragequit". */
   view: "home",
   amount: "1",
   account: "",
@@ -98,6 +119,7 @@ const state = {
   registered: null,
 
   send: { noteCommitment: "", destinationChainId: "", destinationChosen: false, recipientMode: "self", recipientKey: "", resolved: null, draft: null },
+  ragequit: { noteCommitment: "", confirmedCommitment: "", eligibility: {}, checkedFor: null, balance: null, proof: null, response: null },
   /** Starknet destination health. Bridging to a pool bound to a DIFFERENT L1 pool
    *  loses the funds: StarkGate delivers the ETH but `receive_note` reverts with
    *  NotL1Pool, so no note ever exists to claim it. Never offer it blind. */
@@ -189,21 +211,28 @@ function onboardingShell() {
     ${footer()}`;
 }
 
-/** Unlocked: active flow on the left, the persistent Vault dock on the right. */
+/** Unlocked: workspace + compact rail, followed by the full-width identity tile. */
 function appShell() {
   const workspace = state.view === "deposit" ? depositView()
     : state.view === "send" ? sendView()
     : state.view === "receive" ? receiveView()
+    : state.view === "ragequit" ? ragequitView()
     : homeView();
   return `
-    ${topbar()}
-    <main class="app-shell">
-      <section class="workspace-main">
-        ${errorView()}
-        ${workspace}
-      </section>
-      ${vaultDock()}
-    </main>
+    <div class="vault-frame">
+      ${topbar()}
+      <main class="app-shell">
+        <div class="vault-primary-grid">
+          <section class="workspace-main">
+            ${errorView()}
+            ${workspace}
+          </section>
+          ${vaultBalanceBar()}
+          <section class="panel vault-notes-tile">${notesSection()}</section>
+        </div>
+        ${vaultAddressTile()}
+      </main>
+    </div>
     ${footer()}`;
 }
 
@@ -218,6 +247,9 @@ function bind() {
     // starts that one scanner; the left pane only reflects its loading state.
     if (b.dataset.view === "receive" && previousView !== "receive") {
       void guard(scanForNotes, "scan");
+    }
+    if (b.dataset.view === "ragequit" && previousView !== "ragequit") {
+      void guard(refreshRagequitEligibility, "ragequit-check");
     }
   }));
   on("#connect", "click", () => guard(connectWallet));
@@ -266,6 +298,9 @@ function bind() {
   on("#unlock-password", "click", () => guard(() => unlockIdentity("password")));
   on("#reveal-mnemonic", "click", () => { state.notice = `Recovery phrase. Write it down:\n\n${state.identity.mnemonic}`; render(); });
   on("#register-keys", "click", () => guard(registerShieldedAddress));
+  app.querySelectorAll("[data-copy-shielded]").forEach((button) => button.addEventListener("click", () => {
+    void guard(() => copyShieldedKey(button.dataset.copyLabel, button.dataset.copyShielded));
+  }));
   app.querySelectorAll("[data-scan]").forEach((b) => b.addEventListener("click", () => guard(scanForNotes, "scan")));
   on("#toggle-spent-notes", "change", (event) => {
     captureForm();
@@ -279,6 +314,16 @@ function bind() {
     render();
   }));
   on("#resolve-recipient", "click", () => guard(resolveRecipient));
+  app.querySelectorAll('input[name="ragequit-note"]').forEach((input) => input.addEventListener("change", (event) => {
+    selectRagequitNote(state.ragequit, event.target.value);
+    render();
+  }));
+  on("#ragequit-confirm", "change", (event) => {
+    state.ragequit.confirmedCommitment = event.target.checked ? state.ragequit.noteCommitment : "";
+    state.ragequit.proof = null;
+    render();
+  });
+  on("#refresh-ragequit", "click", () => guard(refreshRagequitEligibility, "ragequit-check"));
 
   const wordInputs = [...app.querySelectorAll("[data-mnemonic-word]")];
   const fillImportedPhrase = (value) => {
@@ -372,6 +417,7 @@ function lockVault() {
   state.scanProgress = { active: false, steps: [] };
   state.receive = { scanned: [], scannedCount: 0, index: {}, selected: null, recipient: "", status: null, proof: null, withdrawal: null, response: null };
   state.send = { noteCommitment: "", destinationChainId: "", destinationChosen: false, recipientMode: "self", recipientKey: "", resolved: null, draft: null };
+  state.ragequit = { noteCommitment: "", confirmedCommitment: "", eligibility: {}, checkedFor: null, balance: null, proof: null, response: null };
   navigateVault("home", { replace: true, capture: false });
 }
 
@@ -458,26 +504,43 @@ function setupProtectionFields(buttonId, buttonLabel, confirmation) {
 }
 
 /*//////////////////////////////////////////////////////////////
-                          VAULT DOCK
+                         VAULT TILES
 //////////////////////////////////////////////////////////////*/
 
-/** The persistent right-hand panel: identity, balance, actions, and all notes. */
-function vaultDock() {
+/** The rail's first tile: the number that matters and the three core flows. */
+function vaultBalanceBar() {
   return `
-    <aside class="vault">
-      ${identityStrip()}
+    <section class="panel vault-summary">
       ${balanceCard()}
       <div class="vault-actions">
-        <button class="primary" data-view="deposit">DEPOSIT</button>
+        <button class="primary" data-view="deposit">DEPOSIT →</button>
         <button class="secondary-btn" data-view="send">BRIDGE</button>
         <button class="secondary-btn" data-view="receive">WITHDRAW</button>
+        <button class="secondary-btn emergency-action" data-view="ragequit">EMERGENCY EXIT</button>
       </div>
-      ${notesSection()}
-      <section class="vault-recovery">
-        <span class="eyebrow">RECOVERY</span>
+    </section>`;
+}
+
+/** The final tile keeps publish and recovery controls together, away from daily actions. */
+function vaultAddressTile() {
+  return `
+    <section class="panel vault-address-tile">
+      ${identityStrip()}
+      <div class="vault-address-actions">
+        <button id="register-keys" class="secondary-btn" ${state.registered === false && !state.busy ? "" : "disabled"}>${publishButtonLabel()}</button>
         <button id="reveal-mnemonic" class="secondary-btn">SHOW RECOVERY PHRASE</button>
-      </section>
-    </aside>`;
+      </div>
+    </section>`;
+}
+
+function publishButtonLabel() {
+  return state.registered === true
+    ? "ADDRESS PUBLISHED"
+    : state.registered === false
+      ? "PUBLISH SHIELDED ADDRESS"
+      : !state.account
+        ? "CONNECT WALLET TO PUBLISH"
+        : "CHECKING REGISTRY";
 }
 
 /** The published half of the identity, plus its ERC-6538 registration state. */
@@ -490,21 +553,15 @@ function identityStrip() {
       : state.registered === false
         ? "NOT PUBLISHED"
         : "CHECKING";
-  const canPublish = state.registered === false && !state.busy;
-  const publishLabel = state.registered === true
-    ? "ADDRESS PUBLISHED"
-    : state.registered === false
-      ? "PUBLISH ADDRESS"
-      : !state.account
-        ? "CONNECT WALLET TO PUBLISH"
-        : "CHECKING REGISTRY";
+  const spendingKey = `${B[0].toString()}, ${B[1].toString()}`;
+  const viewingKey = `${V[0].toString()}, ${V[1].toString()}`;
   return `
     <section class="identity-strip">
       <div class="card-heading"><h2>SHIELDED ADDRESS</h2><span class="online"><i class="dot teal-dot"></i> ${status}</span></div>
       <p class="identity-copy">Publish this address to let other users send shielded notes directly to your vault.</p>
-      <div class="meta-address"><b>B</b> ${short(B[0].toString())}, ${short(B[1].toString())}<br><b>V</b> ${short(V[0].toString())}, ${short(V[1].toString())}</div>
-      <div class="key-actions identity-actions">
-        <button id="register-keys" class="secondary-btn" ${canPublish ? "" : "disabled"}>${publishLabel}</button>
+      <div class="shielded-key-list">
+        <div class="shielded-key-row"><span>SPENDING KEY</span><code>${short(B[0].toString())} · ${short(B[1].toString())}</code><button type="button" data-copy-shielded="${escapeHtml(spendingKey)}" data-copy-label="Spending key">COPY</button></div>
+        <div class="shielded-key-row"><span>VIEWING KEY</span><code>${short(V[0].toString())} · ${short(V[1].toString())}</code><button type="button" data-copy-shielded="${escapeHtml(viewingKey)}" data-copy-label="Viewing key">COPY</button></div>
       </div>
     </section>`;
 }
@@ -528,25 +585,38 @@ function notesSection() {
   const showSpent = state.notesUi.showSpent;
   const l1Notes = state.notes.filter((n) => showSpent || n.status !== "spent");
   const scanning = state.noteProgress === "scan";
+  const routeSummaries = [
+    routeSummary("L1", "Ethereum", state.notes.filter((note) => note.status !== "spent").length, state.notes.filter((note) => note.status === "spent").length, "READY", "SPENT"),
+    ...evmChains().map((chain) => l2RouteSummary(chain.key, chain.chainName)),
+    ...(state.starknet?.configured || l2List("starknet").length ? [l2RouteSummary("starknet", "Starknet")] : []),
+  ].join("");
   return `
     <section class="notes-section">
       <div class="notes-heading">
-        <h2>NOTES</h2>
-        <label class="spent-toggle"><input id="toggle-spent-notes" type="checkbox" ${showSpent ? "checked" : ""}><span>SHOW SPENT</span></label>
-      </div>
-      <div class="notes-scan-row">
-        <span>Don't see you note? Scan to fetch it</span>
-        <button data-scan class="unlock" ${state.busy ? "disabled" : ""}>${progressLabel(scanning, "SCAN", "SCANNING")}</button>
+        <div><h2>NOTES</h2><p>Scan your L1 and L2 routes for notes owned by this vault.</p></div>
+        <div class="notes-heading-actions"><label class="spent-toggle"><input id="toggle-spent-notes" type="checkbox" ${showSpent ? "checked" : ""}><span>SHOW SPENT</span></label><button data-scan class="unlock" ${state.busy ? "disabled" : ""}>${progressLabel(scanning, "SCAN", "SCANNING")}</button></div>
       </div>
       ${scanProgressView()}
+      <div class="route-summary-grid">${routeSummaries}</div>
 
       ${l1Notes.length ? `
-        <div class="group-heading"><h3>L1 · ETHEREUM</h3></div>
+        <div class="group-heading note-detail-heading"><h3>L1 · ETHEREUM NOTES</h3></div>
         ${notePreview("l1", l1Notes, l1NoteRow, "", "")}` : ""}
 
       ${evmChains().map((c) => l2VaultGroup(c.key, c.chainName)).join("")}
       ${l2VaultGroup("starknet", "Starknet")}
     </section>`;
+}
+
+function routeSummary(layer, label, firstCount, secondCount, firstLabel, secondLabel) {
+  return `<div class="route-summary"><span><b>${escapeHtml(layer)} · ${escapeHtml(label)}</b><small>${firstCount} ${escapeHtml(firstLabel.toLowerCase())} · ${secondCount} ${escapeHtml(secondLabel.toLowerCase())}</small></span><strong>${firstCount > 0 ? firstLabel : secondCount > 0 ? secondLabel : "DONE"}</strong></div>`;
+}
+
+function l2RouteSummary(chain, label) {
+  const notes = l2List(chain);
+  const spendable = notes.filter((note) => note.status === "spendable").length;
+  const waiting = notes.filter((note) => note.status === "activate" || note.status === "pending").length;
+  return routeSummary("L2", label, spendable, waiting, "AVAILABLE", "PENDING");
 }
 
 function progressLabel(active, idleLabel, activeLabel) {
@@ -779,11 +849,6 @@ function homeView() {
         <span><i class="legend-dot pending"></i> BRIDGED ON L1 · AWAITING L2</span>
         <span><i class="legend-dot empty"></i> NO NOTES</span>
       </div>
-      <div class="home-actions">
-        <button class="primary" data-view="deposit">DEPOSIT →</button>
-        <button class="secondary-btn" data-view="send">BRIDGE</button>
-        <button class="secondary-btn" data-view="receive">WITHDRAW</button>
-      </div>
       <p class="micro">current shielded notes only ★ spent and withdrawn history is not counted</p>
     </section>`;
 }
@@ -984,6 +1049,65 @@ function receiveView() {
     </section>`;
 }
 
+/**
+ * RAGEQUIT. This deliberately sits outside the normal withdrawal language: it
+ * is a public, depositor-paid emergency exit and must never look private.
+ */
+function ragequitView() {
+  const r = state.ragequit;
+  const accountKey = ragequitAccountKey(state.account);
+  const fresh = r.checkedFor === accountKey;
+  const partitioned = partitionRagequitNotes(state.notes, r.eligibility, state.account);
+  const available = fresh ? partitioned.eligible : [];
+  const mismatched = fresh ? partitioned.mismatched : [];
+  const selected = available.find((note) => note.commitment === r.noteCommitment) ?? available[0];
+  const confirmed = hasRagequitConsent(r, selected?.commitment);
+  const checking = state.noteProgress === "ragequit-check";
+  const noteOption = (note) => `<label class="bridge-option note-option emergency-note">
+    <input type="radio" name="ragequit-note" value="${note.commitment}" ${selected?.commitment === note.commitment ? "checked" : ""} />
+    <span class="bridge-option-icon">!</span>
+    <span><b>${formatEther(BigInt(note.value))} ETH</b><small>${note.legacy ? "legacy" : `#${note.index}`} · ${short(note.commitment)}</small></span>
+    <span class="pill danger">PUBLIC EXIT</span>
+  </label>`;
+  const action = checking ? "CHECKING DEPOSITOR…"
+    : state.busy ? (r.proof ? "SUBMITTING RAGEQUIT…" : "PROVING… THIS CAN TAKE A MINUTE")
+    : r.response ? "RAGEQUIT COMPLETE ✓"
+    : r.proof ? "SUBMIT PUBLIC RAGEQUIT →"
+    : "GENERATE RAGEQUIT PROOF →";
+  const canAct = selected && state.account && fresh && confirmed && !r.response && !state.busy;
+  const connectedBalance = r.balance === null ? null : BigInt(r.balance);
+
+  return `
+    <section class="panel flow-panel ragequit-panel">
+      ${flowHead("L1 · EMERGENCY ONLY", "PUBLIC RAGEQUIT", "Exit an L1 note without ASP approval. Use this only when the normal private path is unavailable.")}
+      ${noticeView()}
+      <div class="notice error-card ragequit-warning" role="alert">
+        <strong>THIS DESTROYS YOUR PRIVACY</strong>
+        <span>The transaction permanently links your original deposit address, this commitment, and the amount returned. It is public and irreversible.</span>
+      </div>
+      <div class="ragequit-account">
+        <span><b>CONNECTED ADDRESS</b><code>${state.account ? escapeHtml(state.account) : "not connected"}</code></span>
+        <span><b>L1 GAS BALANCE</b><code>${connectedBalance === null ? "not checked" : `${formatEther(connectedBalance)} ETH`}</code></span>
+        <button id="refresh-ragequit" class="secondary-btn" ${state.busy ? "disabled" : ""}>${checking ? "CHECKING…" : "CHECK ON-CHAIN"}</button>
+      </div>
+      ${state.account && connectedBalance === 0n ? `<div class="notice error-card"><strong>GAS REQUIRED</strong><span>The original depositor address has no ETH. Ragequit has no relayer path, so this address must hold enough ETH to pay L1 gas.</span></div>` : ""}
+      ${fresh && mismatched.length ? `<div class="notice error-card address-mismatch"><strong>WRONG DEPOSITOR ADDRESS</strong><span>${mismatched.map((note) => `${formatEther(BigInt(note.value))} ETH note requires ${escapeHtml(noteEligibilityAddress(note))}`).join("<br>")}<br>Connect the required original depositor EOA. A different wallet cannot ragequit the note.</span></div>` : ""}
+      <fieldset class="bridge-choice note-choice"><legend>ELIGIBLE L1 NOTES · VERIFIED FROM POOL</legend>
+        ${checking ? `<div class="note-empty">Reading depositors and nullifiers from the L1 pool…</div>`
+          : available.length ? available.map(noteOption).join("")
+          : `<div class="note-empty">${!state.account ? "Connect the original depositor EOA, then check on-chain." : fresh ? "No unspent notes belong to this connected depositor." : "Check on-chain to find eligible notes."}</div>`}
+      </fieldset>
+      ${r.proof && selected ? `<div class="notice pink-card"><strong>PROOF READY</strong><span>The proof was generated locally. Submitting it will reveal the selected note and return ${formatEther(BigInt(selected.value))} ETH to ${escapeHtml(state.account)}.</span></div>` : ""}
+      <label class="confirm-row ragequit-confirm"><input type="checkbox" id="ragequit-confirm" ${confirmed ? "checked" : ""} ${!selected || r.response ? "disabled" : ""} /> I understand this publicly links my deposit address and amount, burns the selected note, and cannot be undone.</label>
+      <button id="action" class="primary danger-action" ${canAct ? "" : "disabled"}>${action}</button>
+      <div class="micro">no relayer ★ original depositor pays L1 gas ★ remains available after pool wind-down</div>
+    </section>`;
+}
+
+function noteEligibilityAddress(note) {
+  return state.ragequit.eligibility[note.commitment]?.depositor ?? "unknown address";
+}
+
 /*//////////////////////////////////////////////////////////////
                         SHARED VIEW BITS
 //////////////////////////////////////////////////////////////*/
@@ -1114,6 +1238,11 @@ function captureForm() {
   set(state.send, "recipientMode", app.querySelector('input[name="send-recipient-mode"]:checked')?.value);
   set(state.send, "recipientKey", read("#send-recipient"));
   set(state.receive, "recipient", read("#recv-recipient"));
+  set(state.ragequit, "noteCommitment", app.querySelector('input[name="ragequit-note"]:checked')?.value);
+  const ragequitConfirmed = app.querySelector("#ragequit-confirm");
+  if (ragequitConfirmed) {
+    state.ragequit.confirmedCommitment = ragequitConfirmed.checked ? state.ragequit.noteCommitment : "";
+  }
   set(state, "unlockPassword", read("#unlock-password-input"));
   if (state.setup) {
     set(state.setup, "kind", app.querySelector('input[name="setup-kind"]:checked')?.value);
@@ -1236,6 +1365,68 @@ async function reconcileSpentNotes() {
   if (changed) await saveNotes(state.identity.vaultKey, state.config.scope, state.notes);
   return changed;
 }
+
+/**
+ * Read ragequit authority from the pool for every locally known live note.
+ * Labels can survive partial withdrawals, so local note provenance is not an
+ * authority signal; `depositors(label)` is the source of truth.
+ */
+async function refreshRagequitEligibility() {
+  if (!state.identity) throw new Error("Unlock your vault first.");
+  if (!state.config?.poolAddress) throw new Error("POOL_ADDRESS is not configured on the API.");
+
+  const r = state.ragequit;
+  r.checkedFor = null;
+  r.balance = null;
+  const client = readClient();
+  const ready = state.notes.filter((note) => note.status !== "spent");
+  const entries = await Promise.all(ready.map(async (note) => {
+    const [depositor, spent] = await Promise.all([
+      client.readContract({
+        address: state.config.poolAddress,
+        abi: poolAbi,
+        functionName: "depositors",
+        args: [BigInt(note.label)],
+      }),
+      client.readContract({
+        address: state.config.poolAddress,
+        abi: poolAbi,
+        functionName: "nullifierHashes",
+        args: [BigInt(nullifierHashOf(note.nullifier))],
+      }),
+    ]);
+    return [note.commitment, { depositor, spent: Boolean(spent) }];
+  }));
+
+  r.eligibility = Object.fromEntries(entries);
+  r.checkedFor = ragequitAccountKey(state.account);
+  r.balance = state.account ? (await client.getBalance({ address: state.account })).toString() : null;
+
+  let changed = false;
+  for (const note of ready) {
+    if (r.eligibility[note.commitment]?.spent) {
+      note.status = "spent";
+      changed = true;
+    }
+  }
+  if (changed) await saveNotes(state.identity.vaultKey, state.config.scope, state.notes);
+
+  const eligible = state.notes.filter((note) => note.status !== "spent" && state.account
+    && r.eligibility[note.commitment]?.depositor?.toLowerCase() === state.account.toLowerCase());
+  if (!eligible.some((note) => note.commitment === r.noteCommitment)) {
+    selectRagequitNote(r, eligible[0]?.commitment);
+  }
+}
+
+function invalidateRagequitAuthorization({ clearEligibility = false } = {}) {
+  const r = state.ragequit;
+  r.confirmedCommitment = "";
+  r.proof = null;
+  r.response = null;
+  r.checkedFor = null;
+  r.balance = null;
+  if (clearEligibility) r.eligibility = {};
+}
 /**
  * Commitments are bigints in the SDK but strings once they round-trip through a
  * `data-` attribute, so a raw `===` between them is always false.
@@ -1274,9 +1465,13 @@ async function walletClient() {
 async function connectWallet() {
   if (!window.ethereum) throw new Error("Install an Ethereum wallet to continue.");
   const [account] = await window.ethereum.request({ method: "eth_requestAccounts" });
+  if (ragequitAccountKey(account) !== ragequitAccountKey(state.account)) {
+    invalidateRagequitAuthorization({ clearEligibility: true });
+  }
   state.account = account;
   state.registered = null;
   await checkRegistration();
+  if (state.identity && state.view === "ragequit") await refreshRagequitEligibility();
 }
 
 async function signIdentityMessage() {
@@ -1319,6 +1514,25 @@ async function copySetupMnemonic() {
     if (!copied) throw new Error("Could not copy the recovery phrase. Select the words and copy them manually.");
   }
   state.notice = "Recovery phrase copied. Store it somewhere safe and clear it from your clipboard when finished.";
+}
+
+async function copyShieldedKey(label, value) {
+  if (!value) throw new Error("No shielded key is available to copy.");
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+  } else {
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    if (!copied) throw new Error(`Could not copy the ${String(label || "shielded key").toLowerCase()}.`);
+  }
+  state.notice = `${label || "Shielded key"} copied.`;
 }
 
 async function confirmIdentitySetup() {
@@ -1812,6 +2026,7 @@ function submitFlow() {
     if (state.view === "deposit") await runDeposit();
     else if (state.view === "send") await runSend();
     else if (state.view === "receive") await runReceive();
+    else if (state.view === "ragequit") await runRagequit();
   });
 }
 
@@ -2021,6 +2236,75 @@ async function runSend() {
   send.draft = { selected, destNote, selfNote, bridgedValue, withdrawal, feeCommitment: quote.feeCommitment, scope: state.config.scope, proof, relayed: null };
 }
 
+async function runRagequit() {
+  const r = state.ragequit;
+  if (!state.account) throw new Error("Connect the original depositor EOA first.");
+
+  // Re-read immediately before both proving and submission. A stale tab must not
+  // spend time proving a note that was burned elsewhere, or target the wrong EOA.
+  await refreshRagequitEligibility();
+  const selected = state.notes.find((note) => note.status !== "spent" && note.commitment === r.noteCommitment);
+  if (!selected) throw new Error("Select an eligible, unspent L1 note.");
+  if (!hasRagequitConsent(r, selected.commitment)) {
+    throw new Error("Confirm the public, irreversible privacy warning for this selected note first.");
+  }
+  const eligibility = r.eligibility[selected.commitment];
+  if (!eligibility || eligibility.depositor.toLowerCase() !== state.account.toLowerCase()) {
+    throw new Error(`Connect the original depositor EOA ${eligibility?.depositor ?? "recorded by the pool"}.`);
+  }
+  if (eligibility.spent) throw new Error("That note has already been spent. Run SCAN to refresh your vault.");
+  if (BigInt(r.balance ?? 0) === 0n) {
+    throw new Error("The original depositor address needs ETH to pay L1 gas; ragequit cannot use a relayer.");
+  }
+
+  if (!r.proof) {
+    const proofAccount = state.account.toLowerCase();
+    const proofCommitment = selected.commitment;
+    const { Circuits, PrivacyPoolSDK } = await sdk();
+    const pool = new PrivacyPoolSDK(new Circuits({ browser: true, baseUrl: `${window.location.origin}/api/circuits/` }));
+    const proof = await pool.proveCommitment(
+      BigInt(selected.value),
+      BigInt(selected.label),
+      BigInt(selected.nullifier),
+      BigInt(selected.secret),
+    );
+    if (!(await pool.verifyCommitment(proof))) throw new Error("Ragequit proof verification failed.");
+    if (state.account.toLowerCase() !== proofAccount || r.noteCommitment !== proofCommitment
+      || !hasRagequitConsent(r, proofCommitment)) {
+      throw new Error("The wallet or selected note changed while proving. Review the warning and try again.");
+    }
+    r.proof = { data: proof, account: proofAccount, commitment: proofCommitment };
+    return;
+  }
+
+  if (r.proof.account !== state.account.toLowerCase() || r.proof.commitment !== selected.commitment) {
+    r.proof = null;
+    throw new Error("The prepared proof belongs to a different wallet or note. Review the warning and prove again.");
+  }
+
+  const client = readClient();
+  const wallet = await walletClient();
+  const { request } = await client.simulateContract({
+    address: state.config.poolAddress,
+    abi: poolAbi,
+    functionName: "ragequit",
+    args: [formatRagequitProof(r.proof.data)],
+    account: state.account,
+  });
+  const hash = await wallet.writeContract(request);
+  const receipt = await client.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error("Ragequit transaction reverted.");
+
+  selected.status = "spent";
+  selected.spentBy = "ragequit";
+  selected.ragequitHash = hash;
+  await saveNotes(state.identity.vaultKey, state.config.scope, state.notes);
+  r.response = { hash };
+  r.proof = null;
+  r.eligibility[selected.commitment] = { ...eligibility, spent: true };
+  state.notice = `Ragequit confirmed. ${formatEther(BigInt(selected.value))} ${state.config.symbol} returned publicly to ${state.account}.`;
+}
+
 async function runReceive() {
   const r = state.receive;
   const note = selectedNote();
@@ -2160,10 +2444,38 @@ async function boot() {
     clearUnlockedSession();
   }
   render();
+  if (state.identity && vaultViewFromPath(location.pathname) === "ragequit") {
+    await guard(refreshRagequitEligibility, "ragequit-check");
+  }
 }
 
 boot();
-window.addEventListener("popstate", render);
+window.addEventListener("popstate", () => {
+  render();
+  if (state.identity && state.view === "ragequit") void guard(refreshRagequitEligibility, "ragequit-check");
+});
+if (window.ethereum?.on) {
+  window.ethereum.on("accountsChanged", (accounts) => {
+    state.account = accounts?.[0] ?? "";
+    state.registered = null;
+    invalidateRagequitAuthorization({ clearEligibility: true });
+    render();
+    if (state.identity) {
+      void guard(async () => {
+        await checkRegistration();
+        if (state.view === "ragequit") await refreshRagequitEligibility();
+      }, state.view === "ragequit" ? "ragequit-check" : null);
+    }
+  });
+  window.ethereum.on("chainChanged", () => {
+    state.registered = null;
+    invalidateRagequitAuthorization({ clearEligibility: true });
+    render();
+    if (state.identity && state.view === "ragequit") {
+      void guard(refreshRagequitEligibility, "ragequit-check");
+    }
+  });
+}
 window.setInterval(() => {
   if (!state.identity || state.busy || !state.receive.scanned.some((note) => note._status === "pending")) return;
   captureForm();

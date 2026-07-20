@@ -101,9 +101,12 @@ Source: `deployments/84532.json`.
 Deployed, bridge-configured, and wired into `app/.env` (`BASE_*` + `base` in `L2_EVM_CHAINS`).
 Superseded Base pool: `0x320c4C5e…` (correct L1, stale verifier — §9).
 
-### Set D — Starknet (REDEPLOYED, bound to the canonical L1) ✅
+### Set D — Starknet (pre-`depositWithMessage`; redeploy required)
 Source: `packages/starknet-pool/deployments/starknet-0x534e5f5345504f4c4941.json`
 (note: the sncast deploy writes **here**, not to `packages/contracts/deployments/`).
+
+These addresses predate the immutable `token_bridge` constructor field and the L1
+`depositWithMessage` code. Deploy fresh L1 and Cairo pools before using the new path.
 
 | Contract | Address |
 | --- | --- |
@@ -112,6 +115,7 @@ Source: `packages/starknet-pool/deployments/starknet-0x534e5f5345504f4c4941.json
 | Cairo verifier | `0x0605d599d6c650bc93f60a0ebc4075e1c968f300645b50d27e3b8ed8fd6091e3` |
 | Starknet Core (L1) | `0xE2Bb56ee936fd6433DC0F6e7e3b8365C906AA057` |
 | StarkGate ETH bridge (L1) | `0x8453FC6Cd1bCfE8D4dFC069C400B433054d47bDc` |
+| StarkGate token bridge (L2) | `0x04c5772d1914fe6ce891b64eb35bf3522aeae1315647314aac58b01137607f3f` |
 | L2 ETH asset (felt) | `0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7` |
 
 The class hashes were already declared from the earlier deploy, so this was a fresh **instance**
@@ -165,36 +169,32 @@ The Cairo pool is deployed with `sncast` (not Foundry). Its inputs live in
 `packages/starknet-pool/.env` (see `.env.example` there); the script sources it.
 
 ```bash
-# 1. Deploy the Cairo pool + verifier, bound to the canonical L1.
-#    l1_pool is IMMUTABLE — bind it to 0x98657a or receive_note rejects every note.
+# 1. Deploy the Cairo pool + verifier, bound to the canonical L1 and StarkGate L2 bridge.
+#    Both bindings are IMMUTABLE; a mismatch rejects the on_receive callback.
 cd packages/starknet-pool
 #    .env: SN_ACCOUNT=sn2, SN_RPC=<starknet sepolia rpc>,
-#          L1_POOL_ADDRESS=0x98657a…, SN_ASSET_ADDRESS=0x049d36…
+#          L1_POOL_ADDRESS=0x98657a…, SN_ASSET_ADDRESS=0x049d36…,
+#          SN_TOKEN_BRIDGE_ADDRESS=0x04c5772d…f3f
 ./deploy/deploy-starknet.sh      # prints: DEPLOYED verifier=0x… pool=0x…
 
 # 2. Put the printed pool address in packages/contracts/.env as
-#    STARKNET_SEPOLIA_L2_POOL_FELT. (Core, StarkGate and the receive_note
-#    selector are already filled there.)
+#    STARKNET_SEPOLIA_L2_POOL_FELT. The StarkGate address and token fee are already filled there.
 cd ../contracts
 yarn configure:bridge:starknet-sepolia --broadcast   # NEW script (this repo)
 ```
 
-`STARKNET_SEPOLIA_L1_HANDLER_SELECTOR` = `sn_keccak("receive_note")` =
-`0xafb78720fe8e7dad4e1079e5a4a9ca568567c1eaad64c3c662ef968d138664` (fixed for this
-handler name; recompute only if the handler is renamed).
+The Starknet bridge config uses one `depositWithMessage` operation. Its separate messenger,
+handler, and message-fee fields are zero; only `STARKNET_SEPOLIA_TOKEN_FEE_WEI` is charged.
 
-> **Starknet RPC: the deploy and the app need DIFFERENT nodes.** They pin
-> incompatible JSON-RPC spec versions, and each hard-fails on the other's endpoint:
+> **Starknet RPC:** the deploy tooling and runtime now share JSON-RPC 0.10.x compatibility:
 >
 > | Consumer | Needs spec | Use |
 > | --- | --- | --- |
 > | `sncast` 0.57 (Cairo deploy, `SN_RPC`) | 0.10.x | `https://api.zan.top/public/starknet-sepolia/rpc/v0_10` |
-> | starknet.js 6.x (app, `STARKNET_RPC_URL`) | 0.8.x | `https://starknet-sepolia.infura.io/v3/<key>` |
+> | starknet.js 10.x (app/relayer runtime) | 0.10.x | a paid or public Starknet Sepolia 0.10.x endpoint |
 >
-> Infura serves 0.8.1 → sncast refuses it ("incompatible version 0.8.1. Expected
-> version: 0.10.0"). ZAN serves 0.10.3 → starknet.js 6.x fails against it. A
-> `starknet_chainId` curl succeeds on both and will NOT catch this — verify with the
-> actual tool. Don't try to unify the two.
+> The two consumers may use the same endpoint. Check `starknet_specVersion`; a
+> `starknet_chainId` call alone will not catch a spec mismatch.
 Point `app/.env` `STARKNET_POOL_ADDRESS` at the new Cairo pool and set
 `STARKNET_RPC_URL`, `STARKNET_RELAYER_ADDRESS`, `STARKNET_RELAYER_PRIVATE_KEY`.
 
@@ -215,8 +215,8 @@ Point `app/.env` `STARKNET_POOL_ADDRESS` at the new Cairo pool and set
 | --- | --- |
 | Starknet Core (L1) | `0xE2Bb56ee936fd6433DC0F6e7e3b8365C906AA057` |
 | StarkGate ETH bridge (L1) | `0x8453FC6Cd1bCfE8D4dFC069C400B433054d47bDc` |
+| StarkGate token bridge (L2) | `0x04c5772d1914fe6ce891b64eb35bf3522aeae1315647314aac58b01137607f3f` |
 | Chain id (felt, `SN_SEPOLIA`) | `393402133025997798000961` |
-| `l1_handler` selector | `starkli selector receive_note` |
 
 (Base L1 addresses to be re-verified against the current Base Sepolia deployment
 before mainnet-money use.)
@@ -484,11 +484,13 @@ only ever uses withdrawL1/withdrawL2. Symptom: `Cannot GET /api/circuits/artifac
 | `withdrawL1.{wasm,zkey,vkey}` | `build/withdrawL1/{withdrawL1_js/withdrawL1.wasm, groth16_pkey.zkey, groth16_vkey.json}` | deployed `WithdrawalVerifier` ✅ (nPublic=10) |
 | `withdrawL2.{wasm,zkey,vkey}` | `build/withdrawL2/…` | regenerated `L2WithdrawalVerifier` + Cairo ✅ (nPublic=5) |
 | `commitment.{zkey,vkey}` | `trusted-setup/final-keys/commitment.{zkey,vkey}` | deployed `CommitmentVerifier` ✅ (nPublic=4) |
-| `commitment.wasm` | ⚠️ **no matching source** — `build/commitmentL1` is a *different* circuit (2 public inputs, not 4); staged anyway so the SDK can init | ragequit proving is therefore broken; deposit/send/withdraw unaffected |
+| `commitment.wasm` | `build/commitmentL1/commitmentL1_js/commitmentL1.wasm` | ceremony key pair above ✅ (2 public outputs + public `value`/`label` inputs = nPublic=4) |
 
 Staging is automated — **run `yarn present` in `packages/circuits`** after any setup/rebuild. The
 script writes the 9 files into `packages/sdk/dist/node/artifacts/` (previously it copied
 non-existent `commitment`/`withdraw` circuits into an unused dir and was silently useless).
+Circuits CI also generates and verifies a real proof with the staged commitment wasm and shipped
+ceremony key pair so an incompatible ragequit artifact cannot be published silently.
 
 ## 10. Verification commands (what "working" looks like)
 
@@ -545,7 +547,7 @@ Remaining:
   treat any key ever committed as burned.
 - **Cache the Scan path.** `/api/l2/:chain/index` still re-fetches L1 deliveries + L2
   received/activated on every scan via `DataService` — the biggest remaining Infura consumer.
-- **Starknet fees** — `STARKNET_SEPOLIA_MESSAGE_FEE_WEI` / `_TOKEN_FEE_WEI` are placeholders
-  (`1e14`); tune against real StarkGate costs before relying on them.
+- **Starknet fee** — `STARKNET_SEPOLIA_TOKEN_FEE_WEI` is a placeholder (`1e14`); tune it against
+  real `depositWithMessage` costs before relying on it.
 - **Persisting the log caches** is *not* obviously desirable — see §8; an in-memory cache cannot go
   stale across a pool repoint, which has happened repeatedly here.
