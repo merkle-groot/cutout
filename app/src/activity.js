@@ -29,17 +29,40 @@ export function buildActivity(notes = [], withdrawn = {}, chainLabel = (key) => 
   const entries = [];
 
   for (const note of notes) {
-    // A recovered or legacy note has no local deposit annotation. It is still a
-    // real deposit and must appear — undated rather than omitted.
-    entries.push({
-      kind: "deposit",
-      at: note.depositedAt ?? null,
-      value: note.value,
-      chain: "l1",
-      hash: note.depositHash ?? null,
-      title: "DEPOSIT",
-      detail: note.legacy ? "legacy note" : `note #${note.index}`,
-    });
+    // Every entry carries the id its note is marked by (note-mark.js), so the
+    // log can show the same sigil and name the notes list shows. An L1 note is
+    // marked by its commitment and an L2 note by its `C_dest`, which is the key
+    // the withdrawal records are already filed under below.
+    const id = note.commitment ?? null;
+    // A change note left behind by a partial bridge is not a deposit — it never
+    // came from the user's wallet — so it must not be logged as one. Its own
+    // "how did this note appear" story is the bridge entry emitted below for
+    // the note it is change FROM.
+    if (note.changeFrom) {
+      entries.push({
+        kind: "change",
+        at: note.changeAt ?? null,
+        value: note.value,
+        chain: "l1",
+        hash: null,
+        title: "CHANGE",
+        detail: "remainder from a partial bridge",
+        id,
+      });
+    } else {
+      // A recovered or legacy note has no local deposit annotation. It is still a
+      // real deposit and must appear — undated rather than omitted.
+      entries.push({
+        kind: "deposit",
+        at: note.depositedAt ?? null,
+        value: note.value,
+        chain: "l1",
+        hash: note.depositHash ?? null,
+        title: "DEPOSIT",
+        detail: note.legacy ? "legacy note" : `note #${note.index}`,
+        id,
+      });
+    }
 
     if (note.status !== "spent") continue;
 
@@ -52,6 +75,7 @@ export function buildActivity(notes = [], withdrawn = {}, chainLabel = (key) => 
         hash: note.ragequitHash ?? null,
         title: "PUBLIC RAGEQUIT",
         detail: "exited publicly to the depositor",
+        id,
       });
       continue;
     }
@@ -64,6 +88,7 @@ export function buildActivity(notes = [], withdrawn = {}, chainLabel = (key) => 
       hash: note.spentHash ?? null,
       title: "BRIDGE",
       detail: note.spentTo ? `to ${chainLabel(note.spentTo)}` : "bridged to a destination",
+      id,
     });
   }
 

@@ -1,10 +1,12 @@
 import "./style.css";
 import { cachedPublicationStatus, renderVaultIdentityControls, storePublicationStatus } from "./vault-identity.js";
+import { renderIdenticon } from "./identicon.js";
+import { noteName, renderNoteSigil } from "./note-mark.js";
+import { anchorRect, showCopiedSticker } from "./copy-sticker.js";
 import { createPublicClient, createWalletClient, custom, decodeAbiParameters, formatEther, http, isAddress, parseEther, parseEventLogs } from "viem";
 import {
   IDENTITY_UNWRAP_MESSAGE,
   createMnemonic,
-  forgetIdentity,
   hasIdentity,
   hasLegacyNotes,
   identityUnwrapKind,
@@ -20,6 +22,13 @@ import {
   validateRecoveryPhrase,
 } from "./vault.js";
 import { preservedNotes, runSequentialScan } from "./scan-flow.js";
+import { bridgedValueAfterFee, clampWithdrawAmount, relayFeeBpsFromQuote, remainingNoteValue, validateWithdrawAmount } from "./bridge-flow.js";
+import { MAX_DECIMALS, amountAfterEdit, isAcceptableAmount, truncateAmount } from "./amount-input.js";
+import { atLeastCohort, betterNearbyAmount, exactCohort, trimBenefit } from "./anonymity-set.js";
+import { SPENT_STATUS, largestFirst, matchingNotes, newestFirst, spentLast } from "./note-order.js";
+import { nextWithdrawalIndex, recoverChangeNotes } from "./change-notes.js";
+import { errorHint } from "./error-hints.js";
+import { prove } from "./prove.js";
 import { txLinkHtml } from "./explorer.js";
 import { evmAddressProblem, recipientProblem } from "./recipient.js";
 import { buildActivity, relativeTime } from "./activity.js";
@@ -101,19 +110,50 @@ const poolAbi = [
 const state = {
   /** Which flow occupies the left workspace: "home" | "deposit" | "send" | "receive" | "ragequit". */
   view: "home",
-  amount: "1",
+  // Empty means "unset" — depositView falls back to the pool's minimum deposit
+  // once config has loaded, rather than baking in a guess here.
+  amount: "",
   account: "",
   config: null,
+  /** Static relay-fee estimate ({ bps, feeLabel, ... }) from GET /api/quote, shown
+   *  before the user submits. The authoritative fee is the relayer's signed
+   *  commitment fetched during the actual send — this is only a preview. */
+  quote: null,
+  /** Every deposit's value in the pool, as wei strings, for the anonymity-set
+   *  indicator. Public data, and the whole pool's — asking for it says nothing
+   *  about who is asking. Null until loaded. */
+  poolValues: null,
   error: null,
   notice: null,
   /** Explorer anchor rendered under the current notice; cleared with it. */
   noticeTx: null,
   busy: false,
+  /** When the current proof started, for the elapsed counter. Null when idle. */
+  provingSince: null,
   /** Connected wallet's L1 balance in wei, as a string. Null until read. */
   walletBalance: null,
+  /** The chain id the wallet is actually on. Null until read, and compared against
+   *  `config.chainId` — a wallet on the wrong network otherwise fails at signing
+   *  time with a message from the wallet, not from us. */
+  walletChainId: null,
   noteProgress: null,
   scanProgress: { active: false, steps: [] },
-  notesUi: { showSpent: false, expanded: {}, route: null },
+  notesUi: { showSpent: false, route: null, query: "", sort: "newest" },
+
+  /**
+   * How far the in-flight deposit has got, and what it produced.
+   *
+   * `phase` distinguishes the three waits a deposit actually contains, which a
+   * single busy flag flattened into one indefinite spinner: deriving the note,
+   * waiting for the user to confirm in their wallet, and waiting for the
+   * network to mine what they submitted. The middle one needs the user to act;
+   * the last one does not, and telling them apart is the difference between
+   * "go look at your wallet" and "you are done, sit tight".
+   *
+   * `result` is the finished note, held so the deposit view can show what was
+   * created instead of navigating away from it.
+   */
+  deposit: { phase: null, hash: null, result: null },
 
   /** { mnemonic, master, shielded, vaultKey } — derived, never persisted raw. */
   identity: null,
@@ -127,7 +167,7 @@ const state = {
   withdrawn: {},
   registered: null,
 
-  send: { noteCommitment: "", destinationChainId: "", destinationChosen: false, recipientMode: "self", recipientKey: "", resolved: null, draft: null },
+  send: { noteCommitment: "", destinationChainId: "", destinationChosen: false, recipientMode: "self", recipientKey: "", resolved: null, draft: null, amount: "" },
   ragequit: { noteCommitment: "", confirmedCommitment: "", eligibility: {}, checkedFor: null, balance: null, proof: null, response: null },
   /** Starknet destination health. Bridging to a pool bound to a DIFFERENT L1 pool
    *  loses the funds: StarkGate delivers the ETH but `receive_note` reverts with
@@ -184,6 +224,10 @@ function render() {
   app.innerHTML = state.identity ? appShell() : onboardingShell();
   bind();
   if (!state.config) loadConfig();
+  if (!state.quote) loadQuote();
+  // Only the two views that show it, and refetched on entry: the crowd only grows,
+  // so a count cached across a session would quietly understate it.
+  if (state.view === "deposit" || state.view === "send") loadPoolValues();
 }
 
 function vaultViewFromPath(pathname) {
@@ -199,6 +243,9 @@ function navigateVault(view, { replace = false, capture = true, clearMessages = 
     state.error = null;
     state.notice = null;
     state.noticeTx = null;
+    // The deposit result belongs to the visit that produced it. Leaving the view
+    // and coming back must not greet the user with an old success card.
+    state.deposit = { phase: null, hash: null, result: null };
   }
   if (location.pathname !== path) history[replace ? "replaceState" : "pushState"]({}, "", path);
   render();
@@ -213,7 +260,8 @@ function topbar() {
       <div class="wallet">
         <button class="network"><i class="dot route-ethereum"></i> ${state.config?.chainName ?? "Ethereum"}</button>
         <button id="connect" class="account">${acct}</button>
-        ${state.identity ? `<button id="lock" class="account">LOCK</button>` : ""}
+        ${state.identity ? `<span class="topbar-identicon">${renderIdenticon(state.identity.shielded, { px: 44, label: "Loaded shielded identity" })}</span>
+        <button id="lock" class="account">LOCK</button>` : ""}
       </div>
     </header>`;
 }
@@ -285,8 +333,33 @@ function bind() {
   on("#action", "click", submitFlow);
   on("#dismiss-error", "click", () => { state.error = null; render(); });
   on("[data-dismiss-notice]", "click", () => { state.notice = null; state.noticeTx = null; render(); });
-  on("#amount", "input", (e) => { e.target.value = sanitizeAmount(e.target.value); state.amount = e.target.value; });
-  on("#max-amount", "click", () => guard(async () => { state.amount = await maxDepositAmount(); }));
+  bindAmountInput("#amount", (value) => { state.amount = value; refreshDepositCohort(); }, amountDecimalsFor(state.config));
+  app.querySelectorAll("[data-set-deposit-amount]").forEach((button) => button.addEventListener("click", () => {
+    state.amount = button.dataset.setDepositAmount;
+    render();
+  }));
+  app.querySelectorAll("[data-set-send-amount]").forEach((button) => button.addEventListener("click", () => {
+    state.send.amount = button.dataset.setSendAmount;
+    state.send.draft = null;
+    render();
+  }));
+  // The button names a specific note, so it has to arrive at the bridge with
+  // that note picked. `navigateVault` clears `state.deposit`, so read the
+  // commitment before leaving.
+  on("#bridge-new-note", "click", () => {
+    const commitment = state.deposit.result?.commitment;
+    if (!commitment) return;
+    state.send.noteCommitment = commitment;
+    state.send.amount = "";
+    state.send.draft = null;
+    navigateVault("send");
+  });
+  on("#max-amount", "click", () => guard(async () => {
+    // Truncating MAX would strand up to a full unit of the field's last decimal in
+    // the wallet. Round the *reserve* up to the field's precision instead, so the
+    // figure is both expressible and still leaves gas covered.
+    state.amount = truncateAmount(await maxDepositAmount(), amountDecimalsFor(state.config));
+  }));
   app.querySelectorAll('input[name="send-chain"]').forEach((input) => input.addEventListener("change", (event) => {
     captureForm();
     state.send.destinationChainId = event.target.value;
@@ -296,9 +369,22 @@ function bind() {
   }));
   app.querySelectorAll('input[name="send-note"]').forEach((input) => input.addEventListener("change", (event) => {
     state.send.noteCommitment = event.target.value;
+    // A stale amount is worse than no amount: it could silently carry a smaller
+    // note's typed value onto a bigger note (harmless) or, the dangerous case, a
+    // BIGGER note's value onto a smaller one, where runSend's bounds check would
+    // simply reject it — but a wrong SILENT default is what this guards against.
+    state.send.amount = "";
     state.send.draft = null;
     render();
   }));
+  bindAmountInput("#send-amount", commitSendAmount, amountDecimalsFor(state.config));
+  on("#max-send-amount", "click", () => {
+    const note = pickNote();
+    if (!note) return;
+    state.send.amount = truncateAmount(formatEther(BigInt(note.value)), amountDecimalsFor(state.config));
+    state.send.draft = null;
+    render();
+  });
   app.querySelectorAll('input[name="send-recipient-mode"]').forEach((input) => input.addEventListener("change", (event) => {
     captureForm();
     state.send.recipientMode = event.target.value;
@@ -334,14 +420,17 @@ function bind() {
   on("#reveal-mnemonic", "click", () => { state.notice = `Recovery phrase. Write it down:\n\n${state.identity.mnemonic}`; state.noticeTx = null; render(); });
   on("#register-keys", "click", () => guard(registerShieldedAddress));
   app.querySelectorAll("[data-copy-shielded]").forEach((button) => button.addEventListener("click", () => {
-    void guard(() => copyValue(button.dataset.copyLabel, button.dataset.copyShielded));
+    // Measured before `guard` re-renders and detaches this button.
+    const rect = anchorRect(button);
+    void guard(() => copyValue(button.dataset.copyLabel, button.dataset.copyShielded, rect));
   }));
   // Generic copy. Note rows nest this inside a clickable row, so the click must not
   // also fire the row's "open this note" navigation.
   app.querySelectorAll("[data-copy]").forEach((button) => button.addEventListener("click", (event) => {
     event.stopPropagation();
     event.preventDefault();
-    void guard(() => copyValue(button.dataset.copyLabel, button.dataset.copy));
+    const rect = anchorRect(button);
+    void guard(() => copyValue(button.dataset.copyLabel, button.dataset.copy, rect));
   }));
   app.querySelectorAll("[data-scan]").forEach((b) => b.addEventListener("click", () => guard(scanForNotes, "scan")));
   // Refresh one route without paying for every other destination's index fetch.
@@ -365,12 +454,17 @@ function bind() {
     state.notesUi.route = null;
     render();
   });
-  app.querySelectorAll("[data-expand-notes]").forEach((button) => button.addEventListener("click", () => {
-    captureForm();
-    const group = button.dataset.expandNotes;
-    state.notesUi.expanded[group] = !state.notesUi.expanded[group];
+  on("#switch-chain", "click", () => guard(switchToPoolChain));
+  // Surgical, like the fee preview and the cohort counts: a full render on every
+  // keystroke would rebuild the input and drop the caret mid-word.
+  on("#notes-search", "input", (event) => {
+    state.notesUi.query = event.target.value;
+    refreshNotesList();
+  });
+  on("[data-notes-sort]", "click", () => {
+    state.notesUi.sort = state.notesUi.sort === "largest" ? "newest" : "largest";
     render();
-  }));
+  });
   on("#resolve-recipient", "click", () => guard(resolveRecipient));
   app.querySelectorAll('input[name="ragequit-note"]').forEach((input) => input.addEventListener("change", (event) => {
     selectRagequitNote(state.ragequit, event.target.value);
@@ -419,6 +513,7 @@ function bind() {
   app.querySelectorAll("[data-send-note]").forEach((el) => activate(el, () => {
     captureForm();
     state.send.noteCommitment = el.dataset.sendNote;
+    state.send.amount = "";
     state.send.draft = null;
     navigateVault("send");
   }));
@@ -465,7 +560,15 @@ function activate(el, run) {
 
 /** Run an async handler with uniform busy/error handling. */
 async function guard(fn, noteProgress = null) {
-  if (state.busy) return;
+  // A second action while one is running is dropped — the flows are not reentrant.
+  // Say so: silently ignoring the click is indistinguishable from a dead button,
+  // and the long ones (scanning, proving) are exactly when people click again.
+  if (state.busy) {
+    state.notice = "Still working on the last action. Wait for it to finish before starting another.";
+    state.noticeTx = null;
+    render();
+    return;
+  }
   state.busy = true;
   state.noteProgress = noteProgress;
   state.error = null;
@@ -480,11 +583,21 @@ async function guard(fn, noteProgress = null) {
   render();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
+  // The elapsed counter only makes sense while something long is running, and only
+  // repaints because proving moved off the main thread (prove.js). One interval for
+  // the whole app, cleared in `finally` so a thrown flow cannot leave it ticking.
+  state.provingSince = Date.now();
+  const ticker = window.setInterval(() => {
+    if (app.querySelector(".proving-notice")) refreshProvingElapsed();
+  }, 1000);
+
   try {
     await fn();
   } catch (error) {
     if (error?.code !== 4001) state.error = describeError(error);
   } finally {
+    window.clearInterval(ticker);
+    state.provingSince = null;
     state.busy = false;
     state.noteProgress = null;
     render();
@@ -556,7 +669,7 @@ function identityGate() {
       <div class="mnemonic-grid">${state.setup.mnemonic.split(" ").map((w, i) => `<span><b>${i + 1}</b>${w}</span>`).join("")}</div>
       <div class="key-actions phrase-actions"><button id="cancel-setup" class="secondary-btn">← BACK</button><button id="copy-phrase" class="secondary-btn">COPY ALL 12 WORDS</button></div>
       ${setupProtectionFields("confirm-setup", "CREATE MY VAULT →", "I have written the phrase down somewhere safe.")}
-      <div class="micro">the phrase never leaves this browser　★　losing it loses the funds</div>
+      <div class="micro">the phrase never leaves this browser&#12288;★&#12288;losing it loses the funds</div>
     `;
   }
 
@@ -569,7 +682,7 @@ function identityGate() {
            <button id="unlock-password" class="primary">UNLOCK →</button>`
         : `<button id="unlock-wallet" class="primary">SIGN TO UNLOCK →</button>`}
       <div class="key-actions"><button id="import-identity" class="secondary-btn">IMPORT A DIFFERENT PHRASE</button></div>
-      <div class="micro">the signature only unwraps the phrase　★　it is never the key itself</div>
+      <div class="micro">the signature only unwraps the phrase&#12288;★&#12288;it is never the key itself</div>
     `;
   }
 
@@ -608,7 +721,6 @@ function vaultBalanceBar() {
         <button class="primary" data-view="deposit">DEPOSIT →</button>
         <button class="secondary-btn" data-view="send">BRIDGE</button>
         <button class="secondary-btn" data-view="receive">WITHDRAW</button>
-        <button class="secondary-btn" data-view="activity">ACTIVITY</button>
         <button class="secondary-btn emergency-action" data-view="ragequit">EMERGENCY EXIT</button>
       </div>
     </section>`;
@@ -620,6 +732,7 @@ function balanceCard() {
   return `
     <section class="balance-card">
       <span class="eyebrow">SPENDABLE</span>
+      <button class="balance-activity" type="button" data-view="activity">ACTIVITY →</button>
       <div class="big-balance">${fmt(b.spendable)} <small>ETH</small></div>
       <div class="balance-sub">
         <span><b>${fmt(b.pending)}</b> pending</span>
@@ -691,13 +804,35 @@ function routeSummary(route) {
     </button>`;
 }
 
-function notesRouteDetail(route, showSpent) {
-  const list = route.key === "l1"
-    ? state.notes.filter((note) => showSpent || note.status !== "spent")
-    : l2List(route.key).filter((note) => showSpent || note.status !== "withdrawn");
+/**
+ * What a note can be searched by: its generated name, its commitment, and its
+ * value in ETH. The name is the field people actually use — it is the only part
+ * of a note that is memorable — but a commitment pasted from an explorer has to
+ * find its note too.
+ */
+function noteSearchFields(note, route) {
+  const id = route.key === "l1" ? note.commitment : note.id;
+  return [noteName(id), String(id), formatEther(BigInt(note.value)), note.changeFrom ? "change" : "", note.legacy ? "legacy" : ""];
+}
+
+function notesRouteRows(route, showSpent) {
+  const spentStatus = route.key === "l1" ? SPENT_STATUS.l1 : SPENT_STATUS.l2;
+  const source = route.key === "l1" ? state.notes : l2List(route.key);
+  const visible = matchingNotes(
+    source.filter((note) => showSpent || note.status !== spentStatus),
+    state.notesUi.query,
+    (note) => noteSearchFields(note, route),
+  );
+  const ordered = state.notesUi.sort === "largest" ? largestFirst(visible) : newestFirst(visible);
+  const list = spentLast(ordered, spentStatus);
   const rows = route.key === "l1"
     ? list.map(l1NoteRow).join("")
     : list.map((note) => l2NoteRow(note, route.key)).join("");
+  return { list, rows };
+}
+
+function notesRouteDetail(route, showSpent) {
+  const { list, rows } = notesRouteRows(route, showSpent);
   return `
     <section class="notes-section notes-detail">
       <div class="notes-detail-head">
@@ -708,8 +843,12 @@ function notesRouteDetail(route, showSpent) {
         </div>
         <button class="unlock notes-route-rescan" type="button" data-rescan-route="${escapeHtml(route.key)}" ${state.busy ? "disabled" : ""}>${progressLabel(state.noteProgress === "scan", "RESCAN", "SCANNING")}</button>
       </div>
-      <div class="notes-detail-list">
-        ${rows || `<div class="note-empty">No notes on this route.<br><span>Run RESCAN to refresh this route.</span></div>`}
+      <div class="notes-toolbar">
+        <input id="notes-search" class="notes-search" type="search" placeholder="Search by name, commitment or amount" value="${escapeHtml(state.notesUi.query)}" autocomplete="off" spellcheck="false" aria-label="Search notes" />
+        <button type="button" class="unlock notes-sort" data-notes-sort>${state.notesUi.sort === "largest" ? "LARGEST" : "NEWEST"}</button>
+      </div>
+      <div class="notes-detail-list" id="notes-detail-list">
+        ${rows || `<div class="note-empty">${state.notesUi.query ? "No notes match this search." : "No notes on this route."}<br><span>${state.notesUi.query ? "Clear the search to see every note on this route." : "Run RESCAN to refresh this route."}</span></div>`}
       </div>
     </section>`;
 }
@@ -718,13 +857,12 @@ function progressLabel(active, idleLabel, activeLabel) {
   return active ? `<span class="spinner" aria-hidden="true"></span>${activeLabel}` : idleLabel;
 }
 
-function notePreview(group, list, renderRow, emptyTitle, emptyHint) {
-  if (!list.length) return `<div class="note-empty">${emptyTitle}<br><span>${emptyHint}</span></div>`;
-  const expanded = Boolean(state.notesUi.expanded[group]);
-  const visible = expanded ? list : list.slice(0, 2);
-  return `${visible.map(renderRow).join("")}${list.length > 2
-    ? `<button class="note-more" data-expand-notes="${escapeHtml(group)}">${expanded ? "SHOW LESS" : `MORE +${list.length - 2}`}</button>`
-    : ""}`;
+function noteMark(id) {
+  return `<span class="note-mark" aria-hidden="true">${renderNoteSigil(id)}</span>`;
+}
+
+function noteLabel(id) {
+  return `<small class="note-name">${escapeHtml(noteName(id))}</small>`;
 }
 
 function l1NoteRow(n) {
@@ -733,23 +871,10 @@ function l1NoteRow(n) {
   return `
     <div class="vnote ${spent ? "is-past" : ""}" ${attr}>
       <span class="note-icon route-ethereum">${icons.eth}</span>
-      <div><strong>${formatEther(BigInt(n.value))} ETH</strong><small>${n.legacy ? "legacy" : `#${n.index}`}　·　${short(n.commitment)}</small>${copyButton(n.commitment, "Commitment")}</div>
+      ${noteMark(n.commitment)}
+      <div><strong>${formatEther(BigInt(n.value))} ETH</strong>${noteLabel(n.commitment)}<small>${n.legacy ? "legacy" : n.changeFrom ? "change" : `#${n.index}`}&#12288;·&#12288;${short(n.commitment)}</small>${copyButton(n.commitment, "Commitment")}</div>
       ${pill(spent ? "spent" : "ready")}
     </div>`;
-}
-
-function l2Group(chain) {
-  const list = l2List(chain).filter((x) => state.notesUi.showSpent || x.status !== "withdrawn");
-  if (!list.length) return "";
-  return notePreview(`l2-${chain}`, list, (x) => {
-    const availability = availabilityEstimate(x, chain);
-    return `
-      <div class="vnote ${x.status === "withdrawn" ? "is-past" : ""}">
-        <span class="note-icon route-${chainBrand(chain, chainLabel(chain))}">${icons.eth}</span>
-        <div><strong>${formatEther(BigInt(x.value))} ETH</strong><small>${short(x.id)}</small>${availability ? `<small class="note-eta">${escapeHtml(availability)}</small>` : ""}${copyButton(x.id, "Note commitment")}</div>
-        ${pill(x.status)}
-      </div>`;
-  }, "", "");
 }
 
 function l2NoteRow(x, chain) {
@@ -757,15 +882,10 @@ function l2NoteRow(x, chain) {
   return `
     <div class="vnote ${x.status === "withdrawn" ? "is-past" : ""}">
       <span class="note-icon route-${chainBrand(chain, chainLabel(chain))}">${icons.eth}</span>
-      <div><strong>${formatEther(BigInt(x.value))} ETH</strong><small>${short(x.id)}</small>${availability ? `<small class="note-eta">${escapeHtml(availability)}</small>` : ""}${copyButton(x.id, "Note commitment")}</div>
+      ${noteMark(x.id)}
+      <div><strong>${formatEther(BigInt(x.value))} ETH</strong>${noteLabel(x.id)}<small>${short(x.id)}</small>${availability ? `<small class="note-eta">${escapeHtml(availability)}</small>` : ""}${copyButton(x.id, "Note commitment")}</div>
       ${pill(x.status)}
     </div>`;
-}
-
-function l2VaultGroup(chain, label) {
-  const notes = l2Group(chain);
-  if (!notes) return "";
-  return `<div class="group-heading"><h3>L2 · ${escapeHtml(String(label).toUpperCase())}</h3></div>${notes}`;
 }
 
 const PILL = {
@@ -988,20 +1108,168 @@ function metroMap(destinations, l1Total, l1NoteCount) {
   </div>`;
 }
 
+/** Parse what an amount field currently holds into wei, or null if it isn't a number yet. */
+function amountToWei(text) {
+  const value = String(text ?? "").trim();
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) return null;
+  try {
+    return parseEther(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The crowd a DEPOSIT of this size joins.
+ *
+ * Counts deposits of the same value, because that is what the chain publishes
+ * about a deposit. Nothing here is per-destination: a deposit carries no
+ * destination, so routing cannot divide this number (CLAUDE.md §1).
+ */
+function depositCohortMarkup(amountWei) {
+  if (state.poolValues === null || amountWei === null) return "";
+  const cohort = exactCohort(state.poolValues, amountWei);
+  if (cohort === null) return "";
+
+  const better = betterNearbyAmount(state.poolValues, amountWei);
+  const suggestion = better
+    ? `<button type="button" class="anon-suggest" data-set-deposit-amount="${truncateAmount(formatEther(better.amount), amountDecimalsFor(state.config))}">use ${truncateAmount(formatEther(better.amount), amountDecimalsFor(state.config))} → ${better.cohort}</button>`
+    : "";
+
+  const tone = cohort === 0 ? "is-alone" : cohort < 3 ? "is-thin" : "is-ok";
+  const headline = cohort === 0
+    ? "No other deposit is this size — this amount would identify you on its own."
+    : `${cohort} other deposit${cohort === 1 ? "" : "s"} share this exact amount.`;
+  return `<div class="anon-set ${tone}"><b>${cohort}</b><span>${headline}</span>${suggestion}</div>`;
+}
+
+/**
+ * The crowd a WITHDRAWAL of this size hides in.
+ *
+ * A lower bound, and labelled as one: `Withdrawn._value` only proves the spent
+ * note held at least this much, so every deposit worth at least as much is a
+ * candidate source. Trimming the amount raises the number, which is the whole
+ * point of showing it next to an editable field.
+ */
+function bridgeCohortMarkup(amountWei, noteValue) {
+  if (state.poolValues === null || amountWei === null) return "";
+  const cohort = atLeastCohort(state.poolValues, amountWei);
+  if (cohort === null) return "";
+
+  const trim = trimBenefit(state.poolValues, amountWei, noteValue);
+  const suggestion = trim
+    ? `<button type="button" class="anon-suggest" data-set-send-amount="${truncateAmount(formatEther(trim.amount), amountDecimalsFor(state.config))}">bridge ${truncateAmount(formatEther(trim.amount), amountDecimalsFor(state.config))} → ${trim.cohort}</button>`
+    : "";
+
+  const tone = cohort <= 1 ? "is-alone" : cohort < 4 ? "is-thin" : "is-ok";
+  return `<div class="anon-set ${tone}"><b>${cohort}</b><span>at least ${cohort} deposit${cohort === 1 ? "" : "s"} could be the source of this withdrawal.${trim ? " Bridging less leaves the rest shielded as change." : ""}</span>${suggestion}</div>`;
+}
+
 function depositView() {
   const config = state.config;
-  const minimum = config?.minDepositWei && config.minDepositWei !== "0" ? `${formatEther(BigInt(config.minDepositWei))} ${config.symbol}` : "not available";
+  const hasMinimum = config?.minDepositWei && config.minDepositWei !== "0";
+  const minimum = hasMinimum ? `${formatEther(BigInt(config.minDepositWei))} ${config.symbol}` : "not available";
+  // An unset amount defaults to the pool's own minimum rather than an arbitrary
+  // guess, so the field never opens on a value that would reject.
+  const displayedAmount = state.amount || truncateAmount(depositDefaultAmount(config), amountDecimalsFor(config));
   return `
     <section class="panel flow-panel">
       ${flowHead("L1 · ETHEREUM", "DEPOSIT", "Put value into the pool. The note's secrets come from your phrase, so it survives a wiped browser.")}
       ${depositFlowDiagram()}
+      ${wrongChainView()}
       ${noticeView()}
-      <div class="field-label"><span>FROM</span><span>${state.walletBalance === null ? "" : `BALANCE ${fmt(BigInt(state.walletBalance))} ${config?.symbol ?? "ETH"}　·　`}<i class="dot route-ethereum"></i> ${config?.chainName ?? "LOADING"}</span></div>
-      <div class="amount-field"><div><input id="amount" value="${sanitizeAmount(state.amount)}" inputmode="decimal" autocomplete="off" /><small>Any amount · minimum ${minimum}</small></div>${state.walletBalance === null ? "" : `<button id="max-amount" type="button" class="max-chip" ${state.busy ? "disabled" : ""}>MAX</button>`}<button class="asset">${icons.eth} ${config?.symbol ?? "ETH"}</button></div>
+      <div class="field-label"><span>FROM</span><span>${state.walletBalance === null ? "" : `BALANCE ${fmt(BigInt(state.walletBalance))} ${config?.symbol ?? "ETH"}&#12288;·&#12288;`}<i class="dot route-ethereum"></i> ${config?.chainName ?? "LOADING"}</span></div>
+      <div class="amount-field"><div><input id="amount" value="${escapeHtml(displayedAmount)}" inputmode="decimal" autocomplete="off" /><small>up to ${amountDecimalsFor(config)} decimals · minimum ${minimum}</small></div>${state.walletBalance === null ? "" : `<button id="max-amount" type="button" class="max-chip" ${state.busy ? "disabled" : ""}>MAX</button>`}<button class="asset">${icons.eth} ${config?.symbol ?? "ETH"}</button></div>
+      <div id="deposit-cohort">${depositCohortMarkup(amountToWei(displayedAmount))}</div>
       <div class="field-label pool-label"><span>VARIABLE AMOUNT</span><span>${config ? `${config.vettingFeeBps / 100}% VETTING FEE` : "LOADING"}</span></div>
-      <button id="action" class="primary" ${state.busy ? "disabled" : ""}>${state.busy ? "DEPOSITING… CONFIRM IN YOUR WALLET" : "DEPOSIT TO POOL →"}</button>
-      <div class="micro">derived at the next unused index　★　non-custodial</div>
+      <button id="action" class="primary" ${state.busy || walletOnWrongChain() ? "disabled" : ""}>${depositActionLabel()}</button>
+      ${depositResultCard()}
+      <div class="micro">derived at the next unused index&#12288;★&#12288;non-custodial</div>
     </section>`;
+}
+
+/**
+ * What the deposit button says at each stage.
+ *
+ * The distinction that matters is CONFIRM IN YOUR WALLET versus SUBMITTED: the
+ * first is a request for the user to do something, the second is a promise that
+ * they no longer have to. Showing the first for the whole run — as a single
+ * busy flag forced — sends people back to a wallet they already signed in.
+ */
+function depositActionLabel() {
+  if (!state.busy) return state.deposit.result ? "DEPOSIT ANOTHER →" : "DEPOSIT TO POOL →";
+  if (state.deposit.phase === "signing") return "CONFIRM IN YOUR WALLET…";
+  if (state.deposit.phase === "confirming") return `${progressLabel(true, "", "SUBMITTED · WAITING FOR CONFIRMATION")}`;
+  return progressLabel(true, "", "PREPARING YOUR NOTE…");
+}
+
+/**
+ * The note the deposit just created, shown in place rather than as a notice on
+ * another screen. Carries the same sigil and name the notes list uses, so the
+ * thing the user is introduced to here is recognisable when they meet it again.
+ */
+function depositResultCard() {
+  const note = state.deposit.result;
+  if (!note || state.busy) return "";
+  const symbol = state.config?.symbol ?? "ETH";
+  return `
+    <div class="deposit-result">
+      <div class="deposit-result-head"><span class="eyebrow">DEPOSIT CONFIRMED ✓</span><strong>${fmt(BigInt(note.value))} ${symbol} is in the pool</strong></div>
+      <div class="vnote deposit-result-note">
+        ${noteMark(note.commitment)}
+        <div>
+          <strong>${escapeHtml(noteName(note.commitment))}</strong>
+          <small>note #${escapeHtml(note.index)} · ${short(note.commitment)}</small>
+        </div>
+        ${copyButton(note.commitment, "commitment")}
+      </div>
+      <p class="deposit-result-note-hint">Recoverable from your recovery phrase alone. Nothing here needs backing up.</p>
+      <div class="deposit-result-actions">
+        <button class="secondary-btn" data-view="home">BACK TO VAULT</button>
+        <button id="bridge-new-note" type="button" class="secondary-btn">BRIDGE THIS NOTE →</button>
+        ${state.deposit.hash ? txLink(state.deposit.hash, "l1", "VIEW TRANSACTION") : ""}
+      </div>
+    </div>`;
+}
+
+/**
+ * A resolved recipient's fingerprint, shown once `resolveRecipient` has run.
+ * Same change-detector caveat as everywhere else the identicon appears — it
+ * catches a wrong-key resolution, it does not authenticate anyone.
+ */
+/**
+ * What a ready proof actually commits to, in the two shapes a bridge takes.
+ *
+ * A full spend and a partial one leave the vault in materially different
+ * states: after a partial the user still holds value on L1, under a NEW note
+ * with a new name, and not saying so is how someone concludes their change was
+ * lost. The commitment itself is deliberately not shown — it is not a handle
+ * the user can do anything with, and the recipient finds the note by scanning.
+ */
+function proofReadyText(draft, send) {
+  const symbol = state.config?.symbol ?? "ETH";
+  const destination = chainLabel(destinationKey(send.destinationChainId));
+  const whole = `${fmt(draft.bridgedValue)} ${symbol} lands on ${escapeHtml(destination)} after the relay fee.`;
+  return draft.remainingValue > 0n
+    ? `Spending part of the note. ${whole} The remaining ${fmt(draft.remainingValue)} ${symbol} comes back to L1 as a new note in this vault.`
+    : `Spending the whole note. ${whole} Nothing stays behind on L1.`;
+}
+
+/**
+ * Which fingerprint the send panel should show, if any.
+ *
+ * A self-bridge resolves to this vault's own keys, but only inside
+ * `prepareSend` — waiting for that would put the "am I sending to myself"
+ * check AFTER the user committed to sending. The answer is already known from
+ * the unlocked identity, so show it as soon as the mode is chosen.
+ */
+function sendFingerprint(send, recipientMode) {
+  // Self-bridge shows nothing: the vault's own mark is already in the topbar,
+  // so a second copy of it here was telling the user to compare a fingerprint
+  // against itself. Only a LOOKED-UP recipient gets a mark, sitting on the
+  // right edge of the address field it was resolved from.
+  if (recipientMode !== "other" || !send.resolved) return "";
+  return `<span class="input-mark">${renderIdenticon(send.resolved, { px: 34, label: "Resolved recipient fingerprint" })}</span>`;
 }
 
 /**
@@ -1024,8 +1292,8 @@ function sendView() {
   </label>`;
   const noteOption = (note) => `<label class="bridge-option note-option">
     <input type="radio" name="send-note" value="${note.commitment}" ${selected?.commitment === note.commitment ? "checked" : ""} />
-    <span class="bridge-option-icon route-ethereum">Ξ</span>
-    <span><b>${formatEther(BigInt(note.value))} ETH</b><small>#${note.index} · ${short(note.commitment)}</small></span>
+    ${noteMark(note.commitment)}
+    <span><b>${formatEther(BigInt(note.value))} ETH · ${escapeHtml(noteName(note.commitment))}</b><small>${note.legacy ? "legacy" : note.changeFrom ? "change" : `#${note.index}`} · ${short(note.commitment)}</small></span>
     <span class="pill ok">READY</span>
   </label>`;
   const starknetUsable = state.starknet?.configured === true;
@@ -1043,6 +1311,14 @@ function sendView() {
       <fieldset class="bridge-choice note-choice"><legend>L1 NOTE TO SPEND</legend>
         ${ready.length ? ready.map(noteOption).join("") : `<div class="note-empty">No spendable L1 notes.</div>`}
       </fieldset>
+      ${selected ? `
+        <div class="field-label"><span>WITHDRAW AMOUNT</span><span>UP TO ${formatEther(BigInt(selected.value))} ${state.config?.symbol ?? "ETH"}</span></div>
+        <div class="amount-stack">
+          <div class="amount-field"><div><input id="send-amount" value="${escapeHtml(send.amount || truncateAmount(formatEther(BigInt(selected.value)), amountDecimalsFor(state.config)))}" inputmode="decimal" autocomplete="off" /><small>up to ${amountDecimalsFor(state.config)} decimals</small></div><button id="max-send-amount" type="button" class="max-chip">MAX</button><button class="asset">${icons.eth} ${state.config?.symbol ?? "ETH"}</button></div>
+          <div id="send-fee-preview">${sendFeePreviewMarkup(send, selected)}</div>
+        </div>
+        <div id="send-cohort">${bridgeCohortMarkup(amountToWei(send.amount || formatEther(BigInt(selected.value))), BigInt(selected.value))}</div>
+      ` : ""}
       <fieldset class="bridge-choice target-choice"><legend>BRIDGE TARGET</legend>
         ${evmChains().map((chain) => targetOption(String(chain.chainId), chain.key, chain.chainName)).join("")}
         ${state.starknet ? targetOption(STARKNET_CHAIN_ID, "starknet", "Starknet Sepolia", !starknetUsable) : ""}
@@ -1054,25 +1330,24 @@ function sendView() {
       </fieldset>
       ${recipientMode === "other" ? `
         <label class="input-label">RECIPIENT L1 ADDRESS
-          <input id="send-recipient" placeholder="0x… registered Ethereum address" value="${escapeHtml(send.recipientKey)}" autocomplete="off" spellcheck="false" />
+          <div class="input-with-mark">
+            <input id="send-recipient" placeholder="0x… registered Ethereum address" value="${escapeHtml(send.recipientKey)}" autocomplete="off" spellcheck="false" />
+            ${sendFingerprint(send, recipientMode)}
+          </div>
           ${fieldProblemSlot("send-recipient-problem", evmAddressProblem(send.recipientKey))}
         </label>
         <div class="key-actions"><button id="resolve-recipient" class="secondary-btn">CHECK REGISTRY</button></div>
-        ${send.resolved ? `<div class="notice teal-card"><strong>REGISTERED RECIPIENT</strong><span>B ${short(send.resolved.B[0].toString())}…<br>V ${short(send.resolved.V[0].toString())}…</span></div>` : ""}`
+        ${send.resolved ? `<div class="notice teal-card"><strong>REGISTERED USER FOUND</strong><span>Their shielded address is published on L1. The mark on the field is their fingerprint. The note will be delivered so only they can find it.</span></div>` : ""}`
         : `<div class="notice teal-card"><strong>SELF BRIDGE</strong><span>The destination note will use the shielded address derived from this vault.</span></div>`}
-      ${draft?.relayed || draft?.proof || recipientMode === "other" ? `<div class="notice ${draft?.relayed ? "teal-card" : "pink-card"}">
-        <strong>${draft?.relayed ? "DELIVERED" : draft?.proof ? "PROOF READY" : "REGISTRY ADDRESS ONLY"}</strong>
+      ${draft?.relayed || draft?.proof ? `<div class="notice ${draft?.relayed ? "teal-card" : "pink-card"}">
+        <strong>${draft?.relayed ? "DELIVERED" : "PROOF READY"}</strong>
         <span>${draft?.relayed
           ? `The note is bridging. The recipient finds it by scanning. You send them nothing, and you can close this tab.${txLink(draft.relayed.txHash ?? draft.relayed.hash, "l1", "VIEW L1 RELAY")}`
-          : draft?.proof
-            ? `C_dest ${short(draft.destNote.cDest.toString())}${copyButton(draft.destNote.cDest.toString(), "C_dest")} · bridging ${formatEther(draft.bridgedValue)} ETH after the relay fee.`
-            : recipientMode === "self"
-              ? "Only this vault's public shielded keys are used. Your private keys stay local."
-              : "The L1 address must have published a shielded address in the registry. Private keys are never requested."}</span>
+          : proofReadyText(draft, send)}</span>
       </div>` : ""}
       ${state.busy && !draft?.proof ? provingNotice() : ""}
       <button id="action" class="primary" ${ready.length && send.destinationChosen && recipientReady && !draft?.relayed && !state.busy ? "" : "disabled"}>${action}</button>
-      <div class="micro">self uses this vault　★　other users must be registered on L1</div>
+      <div class="micro">self uses this vault&#12288;★&#12288;other users must be registered on L1</div>
     </section>`;
 }
 
@@ -1090,7 +1365,8 @@ function receiveView() {
   const noteOption = (candidate) => `<label class="bridge-option note-option" data-pick-l2="${candidate.id}">
     <input type="radio" name="withdraw-note" value="${candidate.id}" ${String(r.selected) === candidate.id ? "checked" : ""} />
     <span class="bridge-option-icon route-${chainBrand(candidate.chain, chainLabel(candidate.chain))}">${escapeHtml(candidate.chain === "starknet" ? "SN" : chainInitials(chainLabel(candidate.chain)))}</span>
-    <span><b>${formatEther(BigInt(candidate.value))} ETH</b><small>${escapeHtml(chainLabel(candidate.chain))} · ${short(candidate.id)}</small></span>
+    ${noteMark(candidate.id)}
+    <span><b>${formatEther(BigInt(candidate.value))} ETH · ${escapeHtml(noteName(candidate.id))}</b><small>${escapeHtml(chainLabel(candidate.chain))} · ${short(candidate.id)}</small></span>
     <span class="pill ok">SPENDABLE</span>
   </label>`;
   const st = r.status?.state;
@@ -1115,7 +1391,7 @@ function receiveView() {
             ${spendable.length ? spendable.map(noteOption).join("") : `<div class="note-empty">No spendable L2 notes.<br><span>Use SCAN in the Vault to refresh destination confirmations.</span></div>`}
           </fieldset>`}
       ${note ? `
-        <div class="flow-step active"><span class="flow-number">▸</span><div><span class="eyebrow">SELECTED</span><h3>${formatEther(note.value)} ETH · ${chainLabel(note.chain)}</h3><p>${statusLabel(st)}</p></div></div>
+        <div class="flow-step active"><span class="flow-number">▸</span><div><span class="eyebrow">SELECTED · ${escapeHtml(noteName(note.id))}</span><h3>${formatEther(note.value)} ETH · ${chainLabel(note.chain)}</h3><p>${statusLabel(st)}</p></div></div>
         <label class="input-label">FINAL RECIPIENT ${note.chain === "starknet" ? "(STARKNET FELT252)" : "ADDRESS"}<input id="recv-recipient" placeholder="${note.chain === "starknet" ? "0x… or decimal felt252" : "0x… where the funds actually land"}" value="${escapeHtml(r.recipient)}" autocomplete="off" spellcheck="false" />${fieldProblemSlot("recv-recipient-problem", recipientProblem(r.recipient, note.chain))}</label>`
         : ""}
       <div class="notice ${r.response ? "teal-card" : "pink-card"}">
@@ -1126,7 +1402,7 @@ function receiveView() {
       </div>
       ${state.busy && !r.proof && st === "activated" ? provingNotice() : ""}
       <button id="action" class="primary" ${note && !r.response && !state.busy ? "" : "disabled"}>${action}</button>
-      <div class="micro">keys derived from your phrase　★　notes are found, not announced</div>
+      <div class="micro">keys derived from your phrase&#12288;★&#12288;notes are found, not announced</div>
     </section>`;
 }
 
@@ -1146,8 +1422,8 @@ function ragequitView() {
   const checking = state.noteProgress === "ragequit-check";
   const noteOption = (note) => `<label class="bridge-option note-option emergency-note">
     <input type="radio" name="ragequit-note" value="${note.commitment}" ${selected?.commitment === note.commitment ? "checked" : ""} />
-    <span class="bridge-option-icon">!</span>
-    <span><b>${formatEther(BigInt(note.value))} ETH</b><small>${note.legacy ? "legacy" : `#${note.index}`} · ${short(note.commitment)}</small></span>
+    ${noteMark(note.commitment)}
+    <span><b>${formatEther(BigInt(note.value))} ETH · ${escapeHtml(noteName(note.commitment))}</b><small>${note.legacy ? "legacy" : `#${note.index}`} · ${short(note.commitment)}</small></span>
     <span class="pill danger">PUBLIC EXIT</span>
   </label>`;
   const action = checking ? "CHECKING DEPOSITOR…"
@@ -1161,6 +1437,7 @@ function ragequitView() {
   return `
     <section class="panel flow-panel ragequit-panel">
       ${flowHead("L1 · EMERGENCY ONLY", "PUBLIC RAGEQUIT", "Exit an L1 note without ASP approval. Use this only when the normal private path is unavailable.")}
+      ${wrongChainView()}
       ${noticeView()}
       <div class="notice error-card ragequit-warning" role="alert">
         <strong>THIS DESTROYS YOUR PRIVACY</strong>
@@ -1195,16 +1472,17 @@ function ragequitView() {
  */
 function activityView() {
   const entries = buildActivity(state.notes, state.withdrawn, chainLabel);
-  const kindColor = { deposit: "ethereum", bridge: "optimism", withdraw: "starknet", ragequit: "muted" };
-  const kindIcon = { deposit: "↓", bridge: "→", withdraw: "↑", ragequit: "!" };
+  const kindColor = { deposit: "ethereum", change: "ethereum", bridge: "optimism", withdraw: "starknet", ragequit: "muted" };
+  const kindIcon = { deposit: "↓", change: "±", bridge: "→", withdraw: "↑", ragequit: "!" };
 
   const row = (entry) => {
     const age = relativeTime(entry.at);
     return `
       <div class="vnote activity-row ${entry.kind === "ragequit" ? "is-public" : ""}">
-        <span class="note-icon route-${kindColor[entry.kind] ?? "ethereum"}" aria-hidden="true">${entry.kind === "deposit" || entry.kind === "withdraw" || entry.kind === "bridge" ? kindIcon[entry.kind] : "!"}</span>
+        <span class="note-icon route-${kindColor[entry.kind] ?? "ethereum"}" aria-hidden="true">${entry.kind === "deposit" || entry.kind === "change" || entry.kind === "withdraw" || entry.kind === "bridge" ? kindIcon[entry.kind] : "!"}</span>
+        ${entry.id ? noteMark(entry.id) : ""}
         <div>
-          <strong>${escapeHtml(entry.title)} · ${formatEther(BigInt(entry.value))} ETH</strong>
+          <strong>${escapeHtml(entry.title)} · ${formatEther(BigInt(entry.value))} ETH${entry.id ? ` · ${escapeHtml(noteName(entry.id))}` : ""}</strong>
           <small>${escapeHtml(entry.detail)}</small>
           ${entry.hash ? txLink(entry.hash, entry.kind === "withdraw" ? entry.chain : "l1") : ""}
         </div>
@@ -1221,7 +1499,7 @@ function activityView() {
           ? entries.map(row).join("")
           : `<div class="note-empty">Nothing has happened yet.<br><span>Deposit to start, or run SCAN to rebuild from the chain.</span></div>`}
       </div>
-      <div class="micro">rebuilt from this vault's local caches　★　a recovered note has no local timestamp</div>
+      <div class="micro">rebuilt from this vault's local caches&#12288;★&#12288;a recovered note has no local timestamp</div>
     </section>`;
 }
 
@@ -1233,9 +1511,22 @@ function noteEligibilityAddress(note) {
                         SHARED VIEW BITS
 //////////////////////////////////////////////////////////////*/
 
+/**
+ * Wrong-network banner.
+ *
+ * Placed with the other notices rather than beside the button because it
+ * invalidates the whole form, not one field: nothing on a deposit or ragequit
+ * screen can succeed until the wallet moves.
+ */
+function wrongChainView() {
+  if (!walletOnWrongChain()) return "";
+  return `<div class="notice error-card" role="alert"><strong>WRONG NETWORK</strong><span>This wallet is on chain ${state.walletChainId}, but the pool is on ${escapeHtml(state.config.chainName)} (${state.config.chainId}). Transactions will fail until you switch.</span><button id="switch-chain" class="dismiss" ${state.busy ? "disabled" : ""}>SWITCH TO ${escapeHtml(String(state.config.chainName).toUpperCase())}</button></div>`;
+}
+
 function errorView() {
   if (!state.error) return "";
-  return `<div class="notice error-card" role="alert"><strong>SOMETHING BROKE</strong><span>${escapeHtml(state.error)}</span><button id="dismiss-error" class="dismiss">DISMISS</button></div>`;
+  const hint = errorHint(state.error);
+  return `<div class="notice error-card" role="alert"><strong>SOMETHING BROKE</strong><span>${escapeHtml(state.error)}</span>${hint ? `<span class="error-hint">${escapeHtml(hint)}</span>` : ""}<button id="dismiss-error" class="dismiss">DISMISS</button></div>`;
 }
 function noticeView() {
   if (!state.notice) return "";
@@ -1243,19 +1534,22 @@ function noticeView() {
 }
 
 /**
- * Shown while a proof is being generated, in the frame `guard` yields before the
- * work starts.
+ * Shown while a proof is being generated.
  *
- * This is a warning, not a progress indicator, and it cannot be anything else:
- * snarkjs runs the witness and proof on the main thread, so for the next tens of
- * seconds no timer fires and no pixel repaints. An elapsed counter here would
- * simply freeze at 0 and read as a hang. Naming the freeze in advance is the only
- * honest signal available until proving moves to a Worker.
+ * This used to be a warning rather than a progress indicator, and it had to be:
+ * snarkjs ran the witness and proof on the main thread, so no timer fired and no
+ * pixel repainted for tens of seconds — an elapsed counter would have frozen at 0
+ * and read as a hang. Proving now happens in a Worker (prove.js), so the page is
+ * live throughout and the counter is real.
+ *
+ * The frozen-tab wording is kept for the fallback path, where a browser that
+ * cannot start the Worker still proves inline and still locks up.
  */
 function provingNotice() {
+  const seconds = state.provingSince ? Math.floor((Date.now() - state.provingSince) / 1000) : 0;
   return `<div class="notice pink-card proving-notice" role="status" aria-live="polite">
-    <strong>PROVING LOCALLY</strong>
-    <span>This runs in your browser and takes up to a minute. The tab will stop responding while it does — that is expected. Do not close it.</span>
+    <strong>PROVING LOCALLY <span class="proving-elapsed">${seconds}s</span></strong>
+    <span>This runs in your browser and takes up to a minute. Nothing has been sent anywhere. If the tab stops responding, this browser could not start a background worker and is proving on the main thread — that is expected too. Do not close it.</span>
   </div>`;
 }
 
@@ -1306,7 +1600,9 @@ function l2List(chain) {
   }
   for (const [id, w] of Object.entries(state.withdrawn)) {
     if (w.chain !== chain || seen.has(id)) continue;
-    out.push({ id, value: String(w.value), status: "withdrawn" });
+    // `w.at` dates the withdrawal, which for a note the scan no longer returns
+    // is the only time this vault holds for it — enough to order the row.
+    out.push({ id, value: String(w.value), status: "withdrawn", at: w.at ?? null });
   }
   return out;
 }
@@ -1375,6 +1671,8 @@ function captureForm() {
   set(state.send, "destinationChainId", app.querySelector('input[name="send-chain"]:checked')?.value);
   set(state.send, "recipientMode", app.querySelector('input[name="send-recipient-mode"]:checked')?.value);
   set(state.send, "recipientKey", read("#send-recipient"));
+  set(state.send, "amount", read("#send-amount"));
+  set(state, "amount", read("#amount"));
   set(state.receive, "recipient", read("#recv-recipient"));
   set(state.ragequit, "noteCommitment", app.querySelector('input[name="ragequit-note"]:checked')?.value);
   const ragequitConfirmed = app.querySelector("#ragequit-confirm");
@@ -1420,8 +1718,15 @@ function saveFormDraft() {
         destinationChosen: state.send.destinationChosen,
         recipientMode: state.send.recipientMode,
         recipientKey: state.send.recipientKey,
+        amount: state.send.amount,
       },
       receive: { recipient: state.receive.recipient, selected: state.receive.selected },
+      // Only the hash of a deposit that is already ON CHAIN. A reload used to drop
+      // this and leave a blank form while a transaction was still mining, which
+      // reads as "it never happened" — the worst possible signal mid-deposit. The
+      // secrets are not stored: they are derivable from the phrase, and the note is
+      // rebuilt by `/api/l1/deposits/:hash` or, failing that, by RECOVER.
+      pendingDepositHash: state.deposit.phase === "confirming" ? state.deposit.hash : null,
     }));
   } catch { /* Storage can be unavailable in hardened browser modes. */ }
 }
@@ -1441,6 +1746,39 @@ function restoreFormDraft() {
   // can trail the stored chain id by one interaction. It is derivable, so derive it
   // rather than restoring a form whose destination reads chosen and acts unchosen.
   state.send.destinationChosen = Boolean(state.send.destinationChainId);
+  if (typeof draft.pendingDepositHash === "string" && draft.pendingDepositHash) {
+    state.deposit = { phase: "confirming", hash: draft.pendingDepositHash, result: null };
+    void resumePendingDeposit(draft.pendingDepositHash);
+  }
+}
+
+/**
+ * Pick a reloaded deposit back up.
+ *
+ * Polls the same endpoint the live flow uses. Deliberately does NOT reconstruct
+ * the note from the event: the deposit's secrets come from the mnemonic at a
+ * derived index, so RECOVER is the authoritative rebuild and duplicating that
+ * derivation here would be a second way to get it wrong. This restores the
+ * PROGRESS, then tells the user how to claim the result.
+ */
+async function resumePendingDeposit(hash) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      const response = await fetch(`/api/l1/deposits/${hash}`);
+      if (response.ok) {
+        state.deposit = { phase: null, hash, result: null };
+        state.notice = "A deposit that was in flight when this tab reloaded has confirmed. Hit RECOVER in the Vault to pull the note into this browser.";
+        state.noticeTx = txLink(hash, "l1", "VIEW TRANSACTION");
+        render();
+        return;
+      }
+    } catch { /* Keep polling; the API may still be starting. */ }
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+  // Two minutes without a confirmation is not a failure, just a slow block. Stop
+  // claiming progress rather than spinning forever.
+  state.deposit = { phase: null, hash, result: null };
+  render();
 }
 
 function clearFormDraft() {
@@ -1535,6 +1873,174 @@ function sanitizeAmount(v) {
   const [whole, ...rest] = s.split(".");
   return rest.length ? `${whole || "0"}.${rest.join("")}` : whole;
 }
+
+/** The deposit field's default when the user hasn't typed anything: the pool's
+ *  own minimum, so the field never opens on a value that would reject. */
+/**
+ * How many decimals the amount fields accept.
+ *
+ * `MAX_DECIMALS` by default, because coarse amounts cluster and clustering is what
+ * widens the anonymity set. The pool minimum overrides it when it needs more
+ * precision: `depositDefaultAmount` truncates the minimum DOWN, so a minimum finer
+ * than the field could express would open the form on a figure below it, reject
+ * every deposit, and offer no way to type a valid one.
+ */
+function amountDecimalsFor(config) {
+  const minimum = config?.minDepositWei;
+  if (!minimum || minimum === "0") return MAX_DECIMALS;
+  const [, fraction = ""] = formatEther(BigInt(minimum)).split(".");
+  return Math.max(MAX_DECIMALS, fraction.replace(/0+$/, "").length);
+}
+
+function depositDefaultAmount(config) {
+  const hasMinimum = config?.minDepositWei && config.minDepositWei !== "0";
+  return hasMinimum ? formatEther(BigInt(config.minDepositWei)) : "0";
+}
+
+/**
+ * Wire the three-decimal cap (amount-input.js) onto an amount `<input>`.
+ *
+ * Two listeners with distinct jobs. `beforeinput` REJECTS an edit that would
+ * push the field past three decimals — rejecting rather than rewriting is what
+ * keeps the caret where the user put it and leaves ordinary selection, paste,
+ * and backspace behaving natively. `input` then commits whatever survived.
+ *
+ * `commit(value)` may return a corrected string (the withdraw field clamps to
+ * the note's value); returning nothing leaves what the user typed on screen.
+ */
+function bindAmountInput(selector, commit, maxDecimals = MAX_DECIMALS) {
+  const field = app.querySelector(selector);
+  if (!field) return;
+  field.addEventListener("beforeinput", (event) => {
+    if (event.inputType?.startsWith("delete")) return;
+    const insert = event.data ?? event.dataTransfer?.getData("text") ?? "";
+    const next = amountAfterEdit(event.target.value, insert, event.target.selectionStart, event.target.selectionEnd);
+    if (!isAcceptableAmount(next, maxDecimals)) event.preventDefault();
+  });
+  field.addEventListener("input", (event) => {
+    const corrected = commit(event.target.value);
+    if (typeof corrected === "string" && corrected !== event.target.value) event.target.value = corrected;
+  });
+}
+
+/**
+ * Apply a withdraw amount, clamped to the selected note's value.
+ *
+ * Returns the figure that actually landed (which may be lower than what was
+ * typed) so `bindAmountInput` can put the CLAMPED value on screen, never the
+ * rejected one.
+ */
+function commitSendAmount(value) {
+  state.send.draft = null;
+  const note = pickNote();
+  if (!note || value === "" || value === ".") {
+    state.send.amount = value;
+    refreshSendFeePreview();
+    refreshSendCohort();
+    return value;
+  }
+  const noteValue = BigInt(note.value);
+  let requested;
+  try {
+    requested = parseEther(value);
+  } catch {
+    requested = 0n;
+  }
+  const clamped = clampWithdrawAmount(requested, noteValue);
+  const final = clamped === requested ? value : truncateAmount(formatEther(clamped), amountDecimalsFor(state.config));
+  state.send.amount = final;
+  refreshSendFeePreview();
+  refreshSendCohort();
+  return final;
+}
+
+/**
+ * The withdraw amount broken into what actually matters for the UI: the
+ * clamped wei value, whether it is even spendable, and — once the static
+ * relay-fee estimate (`state.quote`, loaded by `loadQuote`) is in — the net
+ * amount that would land on L2 and what stays behind as change.
+ */
+function relayFeeBps() {
+  return relayFeeBpsFromQuote(state.quote);
+}
+
+function sendAmountDerived(send, selected) {
+  if (!selected) return null;
+  const noteValue = BigInt(selected.value);
+  let requested;
+  try {
+    requested = send.amount ? parseEther(send.amount) : noteValue;
+  } catch {
+    requested = noteValue;
+  }
+  const withdrawnValue = clampWithdrawAmount(requested, noteValue);
+  const amountProblem = validateWithdrawAmount(withdrawnValue, noteValue);
+  const feeBps = relayFeeBps();
+  const net = feeBps !== null ? bridgedValueAfterFee(withdrawnValue, feeBps) : null;
+  const fee = net !== null ? withdrawnValue - net : null;
+  const change = remainingNoteValue(noteValue, withdrawnValue);
+  return { noteValue, withdrawnValue, amountProblem, feeBps, net, fee, change };
+}
+
+/**
+ * The deductions taken out of the typed amount, as rows attached under the
+ * input inside the same border — the running subtraction reads as one object
+ * with the field it applies to, ending on the figure that actually matters.
+ *
+ * The relayer's signed quote is the authoritative fee and is only fetched once
+ * QUOTE & PROVE runs, so this is deliberately labelled an estimate.
+ */
+function sendFeePreviewMarkup(send, selected) {
+  const derived = sendAmountDerived(send, selected);
+  if (!derived) return "";
+  const symbol = state.config?.symbol ?? "ETH";
+  const row = (label, value, extra = "") => `<div class="amount-row ${extra}"><span>${label}</span><span>${value}</span></div>`;
+  if (derived.fee === null) return row("Relay fee", "loading…");
+  // Only the fee is a deduction from the typed amount, so only it carries a
+  // minus and sits above the total. Change comes out of the NOTE, not out of
+  // what is being sent, so it trails the total as a plain statement instead of
+  // reading as a third term in the subtraction.
+  return `
+    ${row(`Relay fee${state.quote?.feeLabel ? ` · ${escapeHtml(state.quote.feeLabel)}` : ""}`, `− ${fmt(derived.fee)} ${symbol}`)}
+    ${row("DELIVERED ON L2", `${fmt(derived.net)} ${symbol}`, "amount-total")}
+    ${derived.change > 0n ? row("Stays on L1 as a change note", `${fmt(derived.change)} ${symbol}`, "amount-aside") : ""}`;
+}
+
+/** Surgical update for the fee preview on every keystroke — a full `render()`
+ *  would rebuild the input mid-edit and drop focus (see `fieldProblemSlot`). */
+function refreshSendFeePreview() {
+  const slot = app.querySelector("#send-fee-preview");
+  if (slot) slot.innerHTML = sendFeePreviewMarkup(state.send, pickNote());
+}
+
+/** Same surgical treatment for the anonymity-set indicators: the count has to move
+ *  while the amount is being typed, which is the only moment it can change a mind. */
+function refreshSendCohort() {
+  const slot = app.querySelector("#send-cohort");
+  const note = pickNote();
+  if (!slot || !note) return;
+  slot.innerHTML = bridgeCohortMarkup(amountToWei(state.send.amount || formatEther(BigInt(note.value))), BigInt(note.value));
+}
+
+/** Just the seconds — repainting the whole notice would restart its animation. */
+function refreshProvingElapsed() {
+  const slot = app.querySelector(".proving-elapsed");
+  if (slot && state.provingSince) slot.textContent = `${Math.floor((Date.now() - state.provingSince) / 1000)}s`;
+}
+
+/** Repaint just the notes list, keeping focus in the search box. */
+function refreshNotesList() {
+  const slot = app.querySelector("#notes-detail-list");
+  const route = notesRoutes().find((candidate) => candidate.key === state.notesUi.route);
+  if (!slot || !route) return;
+  const { rows } = notesRouteRows(route, state.notesUi.showSpent);
+  slot.innerHTML = rows || `<div class="note-empty">${state.notesUi.query ? "No notes match this search." : "No notes on this route."}<br><span>${state.notesUi.query ? "Clear the search to see every note on this route." : "Run RESCAN to refresh this route."}</span></div>`;
+}
+
+function refreshDepositCohort() {
+  const slot = app.querySelector("#deposit-cohort");
+  if (slot) slot.innerHTML = depositCohortMarkup(amountToWei(state.amount || depositDefaultAmount(state.config)));
+}
 function randomField() {
   const bytes = new Uint8Array(31);
   crypto.getRandomValues(bytes);
@@ -1554,6 +2060,14 @@ function nullifierHashOf(nullifier) {
   return poseidon1([BigInt(nullifier)]).toString();
 }
 
+/** The pool's full burned-nullifier set, as decimal strings. Throws on failure. */
+async function fetchSpentNullifierSet() {
+  const response = await fetch("/api/l1/spent-nullifiers");
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error ?? "spent-nullifier index unavailable");
+  return new Set((body.nullifiers ?? []).map(String));
+}
+
 /**
  * Reconcile the local `spent` cache against the pool's burned-nullifier set.
  *
@@ -1570,10 +2084,7 @@ async function reconcileSpentNotes() {
   if (!state.identity || !state.config?.scope) return 0;
   let spentSet;
   try {
-    const response = await fetch("/api/l1/spent-nullifiers");
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error ?? "spent-nullifier index unavailable");
-    spentSet = new Set((body.nullifiers ?? []).map(String));
+    spentSet = await fetchSpentNullifierSet();
   } catch (error) {
     console.warn("[reconcile] spent-nullifier check skipped:", error);
     return 0;
@@ -1683,6 +2194,13 @@ function readClient() {
 async function walletClient() {
   if (!window.ethereum) throw new Error("Connect an Ethereum wallet first.");
   if (!state.account) await connectWallet();
+  // Re-read rather than trusting the cached value: the user can move the wallet at
+  // any point between opening the form and pressing the button, and every caller
+  // here is about to ask for a signature that would fail on the wrong chain.
+  await refreshWalletChain();
+  if (walletOnWrongChain()) {
+    throw new Error(`This wallet is on chain ${state.walletChainId}, but the pool is on ${state.config.chainName} (${state.config.chainId}). Switch networks and try again.`);
+  }
   return createWalletClient({ account: state.account, chain: l1Chain(), transport: custom(window.ethereum) });
 }
 
@@ -1694,6 +2212,7 @@ async function connectWallet() {
   }
   state.account = account;
   state.registered = state.identity && cachedPublicationStatus(localStorage, account, state.identity.shielded) ? true : null;
+  await refreshWalletChain();
   await refreshWalletBalance();
   await checkRegistration();
   if (state.identity && state.view === "ragequit") await refreshRagequitEligibility();
@@ -1705,6 +2224,61 @@ async function connectWallet() {
  * undershooting hands them a transaction their balance cannot pay for.
  */
 const DEPOSIT_GAS_BUDGET = 400_000n;
+
+/**
+ * Which chain the wallet is on, and whether that is the one the pool lives on.
+ *
+ * Read separately from the balance because a wrong-network wallet still reports a
+ * balance — of the wrong chain's ether — so the balance alone cannot tell them
+ * apart. Best-effort: an unreadable chain id is treated as "no answer", never as
+ * a mismatch, so a flaky provider cannot block a deposit that would have worked.
+ */
+async function refreshWalletChain() {
+  if (!window.ethereum || !state.account) {
+    state.walletChainId = null;
+    return;
+  }
+  try {
+    const hex = await window.ethereum.request({ method: "eth_chainId" });
+    state.walletChainId = Number(hex);
+  } catch {
+    state.walletChainId = null;
+  }
+}
+
+/** True only when the wallet has answered AND the answer is the wrong chain. */
+function walletOnWrongChain() {
+  return Boolean(state.config && state.walletChainId !== null && state.walletChainId !== state.config.chainId);
+}
+
+/**
+ * Ask the wallet to move to the pool's chain.
+ *
+ * 4902 means the wallet has never heard of the chain, so adding it is the only way
+ * forward — `l1Chain()` already holds everything `wallet_addEthereumChain` needs.
+ */
+async function switchToPoolChain() {
+  if (!window.ethereum || !state.config) throw new Error("Connect a wallet first.");
+  const chainIdHex = `0x${Number(state.config.chainId).toString(16)}`;
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: chainIdHex }] });
+  } catch (error) {
+    if (error?.code !== 4902) throw error;
+    const chain = l1Chain();
+    await window.ethereum.request({
+      method: "wallet_addEthereumChain",
+      params: [{
+        chainId: chainIdHex,
+        chainName: chain.name,
+        nativeCurrency: chain.nativeCurrency,
+        rpcUrls: chain.rpcUrls.default.http.filter(Boolean),
+        blockExplorerUrls: state.config.explorerUrl ? [state.config.explorerUrl] : undefined,
+      }],
+    });
+  }
+  await refreshWalletChain();
+  await refreshWalletBalance();
+}
 
 /** Read the connected wallet's L1 balance. Best-effort: a failure just hides MAX. */
 async function refreshWalletBalance() {
@@ -1790,7 +2364,7 @@ async function copySetupMnemonic() {
   state.notice = "Recovery phrase copied. Store it somewhere safe and clear it from your clipboard when finished.";
 }
 
-async function copyValue(label, value) {
+async function copyValue(label, value, rect) {
   if (!value) throw new Error(`No ${String(label || "value").toLowerCase()} is available to copy.`);
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
@@ -1806,7 +2380,7 @@ async function copyValue(label, value) {
     textarea.remove();
     if (!copied) throw new Error(`Could not copy the ${String(label || "value").toLowerCase()}.`);
   }
-  state.notice = `${label || "Value"} copied.`;
+  showCopiedSticker(rect);
 }
 
 async function confirmIdentitySetup() {
@@ -2044,7 +2618,62 @@ async function recoverL1Notes() {
 
   // Keep legacy (non-derivable) notes; they can never be recovered this way.
   const legacy = state.notes.filter((n) => n.legacy);
-  state.notes = [...recovered, ...legacy];
+  const baseline = [...recovered, ...legacy];
+
+  // Change notes left behind by a PARTIAL withdrawal have no creation-time event
+  // of their own (unlike a deposit's `precommitment`) — see change-notes.js for
+  // why. Reconstruct them from the pool's full `Withdrawn` history, seeded from
+  // every note this pass already knows about. Best-effort: a failure here must
+  // not block deposit recovery, which is the half that actually protects funds
+  // from a wiped browser.
+  let changeNotes = [];
+  try {
+    const withdrawalsResponse = await fetch("/api/l1/withdrawals");
+    const withdrawalsBody = await withdrawalsResponse.json();
+    if (!withdrawalsResponse.ok) throw new Error(withdrawalsBody.error ?? "Unable to index withdrawals.");
+    const withdrawals = (withdrawalsBody.withdrawals ?? []).map((w) => ({
+      newCommitment: BigInt(w.newCommitment),
+      withdrawnValue: BigInt(w.withdrawnValue),
+      spentNullifierHash: BigInt(w.spentNullifierHash),
+    }));
+
+    const { generateWithdrawalSecrets, getCommitment } = await sdk();
+    const keys = state.identity.master;
+    const changePrev = new Map(state.notes.filter((n) => n.changeFrom).map((n) => [n.commitment, n]));
+    const seed = baseline
+      .filter((n) => n.nullifier != null)
+      .map((n) => ({ commitment: n.commitment, label: BigInt(n.label), value: BigInt(n.value), nullifier: BigInt(n.nullifier) }));
+
+    changeNotes = recoverChangeNotes({
+      notes: seed,
+      withdrawals,
+      deriveSecrets: (label, index) => generateWithdrawalSecrets(keys, label, index),
+      commitmentHash: (value, label, nullifier, secret) => getCommitment(value, label, nullifier, secret).hash,
+      nullifierHash: (nullifier) => BigInt(nullifierHashOf(nullifier)),
+    }).map((n) => {
+      const commitment = n.commitment.toString();
+      const local = changePrev.get(commitment);
+      return {
+        ...local,
+        withdrawalIndex: n.withdrawalIndex.toString(),
+        commitment,
+        label: n.label.toString(),
+        value: n.value.toString(),
+        nullifier: n.nullifier.toString(),
+        secret: n.secret.toString(),
+        status: local?.status ?? "ready",
+        changeFrom: n.changeFrom.toString(),
+      };
+    });
+  } catch (error) {
+    console.warn("[recover] change-note reconstruction skipped:", error);
+    // A note this pass cannot see is still present in the current cache (if any) —
+    // never let a failed reconstruction erase a change note SAVED locally at
+    // creation time.
+    changeNotes = state.notes.filter((n) => n.changeFrom);
+  }
+
+  state.notes = [...baseline, ...changeNotes];
   await saveNotes(state.identity.vaultKey, state.config.scope, state.notes);
 
   // Recovery walks public deposits and cannot tell a spent note from a live one, so
@@ -2319,6 +2948,51 @@ async function loadConfig() {
   }
 }
 
+let poolValuesInFlight = false;
+
+/**
+ * Every deposit value in the pool, for the anonymity-set indicator.
+ *
+ * Refetched rather than cached forever: the crowd only grows, and a stale count
+ * understates it. Failure is silent — the indicator simply does not render, which
+ * is the right outcome for a number that must never be guessed at.
+ */
+async function loadPoolValues() {
+  if (poolValuesInFlight) return;
+  poolValuesInFlight = true;
+  try {
+    const response = await fetch("/api/l1/deposits");
+    if (!response.ok) return;
+    const body = await response.json();
+    state.poolValues = (body.deposits ?? []).map((deposit) => String(deposit.value));
+    render();
+  } catch {
+    // Leave whatever was loaded before; an indicator that vanishes on a blip is worse
+    // than one a few deposits behind.
+  } finally {
+    poolValuesInFlight = false;
+  }
+}
+
+let quoteInFlight = false;
+let quoteAttempted = false;
+
+/** A static relay-fee estimate, shown in the bridge form before the user submits. */
+async function loadQuote() {
+  if (state.quote || quoteInFlight || quoteAttempted) return;
+  quoteInFlight = true;
+  try {
+    const response = await fetch("/api/quote");
+    state.quote = response.ok ? await response.json() : null;
+  } catch {
+    state.quote = null;
+  } finally {
+    quoteInFlight = false;
+    quoteAttempted = true;
+  }
+  render();
+}
+
 /**
  * Is the Starknet destination safe to send to?
  *
@@ -2352,11 +3026,15 @@ function submitFlow() {
 
 /** Deposit with secrets DERIVED from the mnemonic at the next unused index. */
 async function runDeposit() {
+  state.deposit = { phase: "preparing", hash: null, result: null };
   const config = state.config;
   if (!config?.poolAddress) throw new Error("POOL_ADDRESS is not configured on the API.");
   if (!config.scope) throw new Error("POOL_SCOPE is not configured on the API.");
 
-  const amount = sanitizeAmount(state.amount);
+  // An untouched field never wrote to `state.amount` — it only ever showed the
+  // masked default via `depositView`'s own fallback. Fall back the same way here
+  // so a straight "DEPOSIT" click submits exactly what was on screen.
+  const amount = sanitizeAmount(state.amount || depositDefaultAmount(config));
   if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(amount) || Number(amount) <= 0) throw new Error("Enter a positive ETH amount.");
   const value = parseEther(amount);
   if (value < BigInt(config.minDepositWei)) throw new Error(`Below the pool minimum of ${formatEther(BigInt(config.minDepositWei))} ${config.symbol}.`);
@@ -2383,15 +3061,23 @@ async function runDeposit() {
   const { nullifier, secret } = generateDepositSecrets(state.identity.master, scope, index);
   const precommitment = hashPrecommitment(nullifier, secret);
 
+  // `writeContract` resolves the moment the user confirms and the tx reaches the
+  // network — well before it is mined. That resolution IS the "submitted" event,
+  // and it is what lets the button stop asking for a wallet confirmation that has
+  // already happened.
+  setDepositPhase("signing");
   const hash = await wallet.writeContract({
     address: config.poolAddress, abi: poolAbi, functionName: "deposit",
     args: [precommitment], value,
   });
+  state.deposit.hash = hash;
+  setDepositPhase("confirming");
+
   const receipt = await client.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") throw new Error("Deposit transaction reverted.");
 
   const event = depositEventFromReceipt(receipt, config.poolAddress, precommitment);
-  state.notes = [...state.notes, {
+  const note = {
     index: index.toString(),
     commitment: event.commitment,
     label: event.label,
@@ -2403,12 +3089,27 @@ async function runDeposit() {
     // recovering it would mean a receipt lookup per note on every scan.
     depositedAt: Date.now(),
     depositHash: hash,
-  }];
+  };
+  state.notes = [...state.notes, note];
   await saveNotes(state.identity.vaultKey, state.config.scope, state.notes);
-  state.notice = `Deposited ${formatEther(BigInt(event.value))} ${config.symbol} at index ${index}. Recoverable from your phrase.`;
-  state.noticeTx = txLink(hash, "l1");
   await refreshWalletBalance();
-  navigateVault("home", { replace: true, capture: false, clearMessages: false });
+
+  // Deliberately NOT navigating home. The note that was just created is the
+  // whole point of the flow, and bouncing to the dashboard replaced it with a
+  // one-line notice the user had to go hunting for. The result stays here, on
+  // the view that produced it, and leaving is a choice the user makes.
+  state.deposit.result = note;
+  state.amount = "";
+  // The crowd this deposit just joined now includes it. Refetch rather than
+  // incrementing locally: the count is the chain's, and a locally-adjusted figure
+  // would drift from it the moment anyone else deposits.
+  void loadPoolValues();
+}
+
+/** Advance the deposit's phase and paint it before the next wait begins. */
+function setDepositPhase(phase) {
+  state.deposit.phase = phase;
+  render();
 }
 
 function depositEventFromReceipt(receipt, poolAddress, precommitment) {
@@ -2463,6 +3164,22 @@ async function runSend() {
       spent.spentAt = Date.now();
       spent.spentHash = result.txHash ?? result.hash ?? null;
     }
+    // The change note only becomes real once the relay actually lands — a proof
+    // that never gets submitted must not leave a phantom note sitting in the
+    // vault with no matching leaf in the pool's tree.
+    if (draft.remainingValue > 0n && draft.changeCommitment != null) {
+      state.notes.push({
+        withdrawalIndex: draft.changeIndex.toString(),
+        commitment: draft.changeCommitment,
+        label: draft.selected.label,
+        value: draft.remainingValue.toString(),
+        nullifier: draft.changeNullifier,
+        secret: draft.changeSecret,
+        status: "ready",
+        changeFrom: draft.selected.commitment,
+        changeAt: Date.now(),
+      });
+    }
     await saveNotes(state.identity.vaultKey, state.config.scope, state.notes);
     await rememberPendingSelfBridge(draft);
     return;
@@ -2472,6 +3189,19 @@ async function runSend() {
   const { B, V } = send.resolved;
   const selected = pickNote();
   if (!selected) throw new Error("No L1 note to spend.");
+
+  const noteValue = BigInt(selected.value);
+  const rawAmount = sanitizeAmount(send.amount);
+  let withdrawnValue = noteValue;
+  if (rawAmount) {
+    if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(rawAmount) || Number(rawAmount) <= 0) {
+      throw new Error("Enter a positive ETH withdrawal amount.");
+    }
+    withdrawnValue = parseEther(rawAmount);
+  }
+  const amountProblem = validateWithdrawAmount(withdrawnValue, noteValue);
+  if (amountProblem) throw new Error(amountProblem);
+
   // A tab open since before this note was spent elsewhere would build a valid proof
   // the relayer only rejects at `relay()` with NullifierAlreadySpent. Reconcile
   // against the chain first, then bail with a clear message. `selected` is a live
@@ -2483,20 +3213,20 @@ async function runSend() {
   if (!state.config?.scope) throw new Error("POOL_SCOPE is not configured on the API.");
   if (!state.account) await connectWallet();
 
-  const { Circuits, NoteService, PrivacyPoolSDK, calculateRelayContext } = await sdk();
+  const { NoteService, calculateRelayContext, generateWithdrawalSecrets, WITHDRAW_L1_SIGNALS } = await sdk();
   const notes = new NoteService();
 
   // One ephemeral scalar for the note. The quote needs E/viewTag to build the
   // exact RelayData bytes the proof context binds; neither depends on value.
   const ephemeralScalar = randomField();
-  const preview = notes.buildDestNote({ B, V }, BigInt(selected.value), ephemeralScalar);
+  const preview = notes.buildDestNote({ B, V }, withdrawnValue, ephemeralScalar);
 
   const quoteResponse = await fetch("/api/relayer/quote", {
     method: "POST", headers: { "content-type": "application/json" },
     body: jsonBody({
       chainId: state.config.chainId,
       destinationChainId: send.destinationChainId,
-      amount: selected.value,
+      amount: withdrawnValue,
       asset: state.config.asset,
       // The SENDER's address. This lands in the public `WithdrawalRelayed` event,
       // so it must never be the recipient's exit address.
@@ -2514,7 +3244,9 @@ async function runSend() {
   // what the proof context binds and what the relayer re-decodes to check
   // bridgedValue. A second source of truth silently produces a rejected relay.
   const feeBps = decodeRelayData(quote.feeCommitment.withdrawalData).relayFeeBPS;
-  const bridgedValue = BigInt(selected.value) - ((BigInt(selected.value) * feeBps) / 10_000n);
+  // The fee is a cut of the WITHDRAWN amount, not the full note — a partial
+  // withdrawal must not pay a fee sized for value that never left L1.
+  const bridgedValue = bridgedValueAfterFee(withdrawnValue, feeBps);
   if (bridgedValue <= 0n) throw new Error("Relay fee leaves no value to bridge.");
 
   // C_dest folds the value in, so it must be rebuilt against the NET value.
@@ -2530,13 +3262,34 @@ async function runSend() {
   if (!stateResponse.ok) throw new Error(stateProof.error ?? "L1 state proof unavailable.");
   if (!aspResponse.ok) throw new Error(aspProof.error ?? "ASP proof unavailable.");
 
-  const pool = new PrivacyPoolSDK(new Circuits({ browser: true, baseUrl: `${window.location.origin}/api/circuits/` }));
+  // What is left of the note after this withdrawal. Zero for a full spend — the
+  // common case — in which case the change note's secrets are thrown away right
+  // after proving, exactly as before this note ever mattered.
+  const remainingValue = remainingNoteValue(noteValue, withdrawnValue);
+  const label = BigInt(selected.label);
+  let changeNullifier;
+  let changeSecret;
+  const changeIndex = nextWithdrawalIndex(selected);
+  if (remainingValue > 0n) {
+    // CRITICAL: these secrets must be RE-DERIVABLE from the mnemonic, never
+    // random — the change note they gate is real spendable value, and a random
+    // (nullifier, secret) discarded after proving is unrecoverable the moment
+    // this tab closes. `generateWithdrawalSecrets` is keyed by the parent's
+    // LABEL (not scope) because withdrawL1.circom gives the change note the
+    // SAME label as the note it came from, and by the note's depth in that
+    // label's chain, which `recoverL1Notes` recounts from chain state alone.
+    ({ nullifier: changeNullifier, secret: changeSecret } = generateWithdrawalSecrets(state.identity.master, label, changeIndex));
+  } else {
+    changeNullifier = randomField();
+    changeSecret = randomField();
+  }
+
   const context = BigInt(calculateRelayContext(withdrawal, BigInt(state.config.scope)));
-  const proof = await pool.proveWithdrawalL1(
-    { hash: BigInt(selected.commitment), value: BigInt(selected.value), label: BigInt(selected.label), nullifier: BigInt(selected.nullifier), secret: BigInt(selected.secret) },
+  const proofArgs = [
+    { hash: BigInt(selected.commitment), value: noteValue, label, nullifier: BigInt(selected.nullifier), secret: BigInt(selected.secret) },
     {
       context,
-      withdrawnValue: BigInt(selected.value),
+      withdrawnValue,
       bridgedValue,
       stateMerkleProof: stateProof.proof,
       stateRoot: BigInt(stateProof.root),
@@ -2546,11 +3299,17 @@ async function runSend() {
       aspTreeDepth: BigInt(aspProof.depth),
       spendingPublicKey: B,
       sharedSecretX: destNote.sharedSecretX,
-      newNullifier: randomField(),
-      newSecret: randomField(),
+      newNullifier: changeNullifier,
+      newSecret: changeSecret,
     },
-  );
-  if (!(await pool.verifyWithdrawalL1(proof))) throw new Error("L1 proof verification failed.");
+  ];
+  const proof = await prove({ kind: "withdrawL1", args: proofArgs }, async () => {
+    const { Circuits, PrivacyPoolSDK } = await sdk();
+    const pool = new PrivacyPoolSDK(new Circuits({ browser: true, baseUrl: `${window.location.origin}/api/circuits/` }));
+    const inline = await pool.proveWithdrawalL1(...proofArgs);
+    if (!(await pool.verifyWithdrawalL1(inline))) throw new Error("L1 proof verification failed.");
+    return inline;
+  });
 
   // A self-bridge can be represented in the encrypted L2 cache immediately
   // after the L1 relay. Derive the same recipient-side spend material a later
@@ -2564,7 +3323,15 @@ async function runSend() {
       }], state.identity.shielded)
     : [];
 
-  send.draft = { selected, destNote, selfNote, bridgedValue, withdrawal, feeCommitment: quote.feeCommitment, scope: state.config.scope, proof, relayed: null };
+  send.draft = {
+    selected, destNote, selfNote, bridgedValue, withdrawal,
+    feeCommitment: quote.feeCommitment, scope: state.config.scope, proof, relayed: null,
+    remainingValue,
+    changeCommitment: remainingValue > 0n ? String(proof.publicSignals[WITHDRAW_L1_SIGNALS.newCommitmentHashL1]) : null,
+    changeIndex,
+    changeNullifier: changeNullifier.toString(),
+    changeSecret: changeSecret.toString(),
+  };
 }
 
 async function runRagequit() {
@@ -2591,15 +3358,19 @@ async function runRagequit() {
   if (!r.proof) {
     const proofAccount = state.account.toLowerCase();
     const proofCommitment = selected.commitment;
-    const { Circuits, PrivacyPoolSDK } = await sdk();
-    const pool = new PrivacyPoolSDK(new Circuits({ browser: true, baseUrl: `${window.location.origin}/api/circuits/` }));
-    const proof = await pool.proveCommitment(
+    const commitmentArgs = [
       BigInt(selected.value),
       BigInt(selected.label),
       BigInt(selected.nullifier),
       BigInt(selected.secret),
-    );
-    if (!(await pool.verifyCommitment(proof))) throw new Error("Ragequit proof verification failed.");
+    ];
+    const proof = await prove({ kind: "commitment", args: commitmentArgs }, async () => {
+      const { Circuits, PrivacyPoolSDK } = await sdk();
+      const pool = new PrivacyPoolSDK(new Circuits({ browser: true, baseUrl: `${window.location.origin}/api/circuits/` }));
+      const inline = await pool.proveCommitment(...commitmentArgs);
+      if (!(await pool.verifyCommitment(inline))) throw new Error("Ragequit proof verification failed.");
+      return inline;
+    });
     if (state.account.toLowerCase() !== proofAccount || r.noteCommitment !== proofCommitment
       || !hasRagequitConsent(r, proofCommitment)) {
       throw new Error("The wallet or selected note changed while proving. Review the warning and try again.");
@@ -2707,7 +3478,7 @@ async function prepareL2Proof(note) {
     throw new Error(config.error ?? `The ${starknet ? "Starknet" : "L2"} relayer is not configured.`);
   }
 
-  const { encodeL2RelayData, calculateContext, calculateContextStarknet, Circuits, PrivacyPoolSDK } = await sdk();
+  const { encodeL2RelayData, calculateContext, calculateContextStarknet } = await sdk();
 
   // The destination spend is its own relay with its own fee — NOT the L1 relay's
   // fee. The recipient sets it; the F5 relayer submits and eats the gas.
@@ -2737,8 +3508,7 @@ async function prepareL2Proof(note) {
   }
 
   // Same circuit for both chains — only the verifier differs (Solidity vs Cairo).
-  const pool = new PrivacyPoolSDK(new Circuits({ browser: true, baseUrl: `${window.location.origin}/api/circuits/` }));
-  const proof = await pool.proveWithdrawalL2({
+  const l2Args = [{
     context,
     noteValue: note.value,
     stateMerkleProof: { index: entry.proof.index, siblings: entry.proof.siblings.map(BigInt), root: BigInt(entry.proof.root) },
@@ -2746,8 +3516,14 @@ async function prepareL2Proof(note) {
     stateTreeDepth: BigInt(entry.depth),
     stealthPrivateKey: note.stealthPrivKey,
     sharedSecretX: note.sharedSecretX,
+  }];
+  const proof = await prove({ kind: "withdrawL2", args: l2Args }, async () => {
+    const { Circuits, PrivacyPoolSDK } = await sdk();
+    const pool = new PrivacyPoolSDK(new Circuits({ browser: true, baseUrl: `${window.location.origin}/api/circuits/` }));
+    const inline = await pool.proveWithdrawalL2(...l2Args);
+    if (!(await pool.verifyWithdrawalL2(inline))) throw new Error("Destination proof verification failed.");
+    return inline;
   });
-  if (!(await pool.verifyWithdrawalL2(proof))) throw new Error("Destination proof verification failed.");
 
   // Starknet's `withdraw` entrypoint takes the felts as decimal strings.
   r.withdrawal = starknet
@@ -2806,7 +3582,8 @@ if (window.ethereum?.on) {
       }, state.view === "ragequit" ? "ragequit-check" : null);
     }
   });
-  window.ethereum.on("chainChanged", () => {
+  window.ethereum.on("chainChanged", (chainId) => {
+    state.walletChainId = chainId ? Number(chainId) : null;
     state.registered = state.identity && cachedPublicationStatus(localStorage, state.account, state.identity.shielded) ? true : null;
     invalidateRagequitAuthorization({ clearEligibility: true });
     render();

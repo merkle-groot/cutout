@@ -15,18 +15,17 @@ node_modules
 # Cursor rules files
 .cursorrules*
 
-# Ignore generated markdown notes/logs (keeps stray AI/agent scratch notes out of
-# the repo). Anything meant to be REAL documentation must be un-ignored below, or
-# git will silently drop it — including a brand-new page under docs/, which is a
-# trap: the existing docs/ pages only survive because they were committed before
-# this rule existed, and gitignore does not affect already-tracked files.
+# All markdown is local-only. The root README is the single tracked document; every
+# other .md (CLAUDE.md, PROGRESS.md, FIXES.md, SECURITY.md, package READMEs, design
+# notes, agent scratch files) stays on disk and out of the index.
+#
+# The leading slash in `!/README.md` is load-bearing: a bare `!README.md` would also
+# un-ignore every nested README.md (app/, packages/*/). Anchoring it to the repo root
+# keeps the negation to this one file.
 *.md
-!README.md
-!CLAUDE.md
-!SECURITY.md
-!PROGRESS.md
-!FIXES.md
-!docs/**/*.md
+!/README.md
 
-# Keep local documentation drafts out of commits.
-docs/*
+# The docs/ tree (Docusaurus site + design documents) is local-only and untracked.
+# It was removed from the index with `git rm -r --cached docs`; the files remain on
+# disk. Listed after the *.md rules so it wins for everything underneath it.
+docs/

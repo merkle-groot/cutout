@@ -148,6 +148,38 @@ l1Router.get(
   ),
 );
 
+/**
+ * Every `Withdrawn` event in the pool, unabridged (unlike `/activity`, which
+ * truncates to the 12 most recent for the dashboard).
+ *
+ * A change note left behind by a partial withdrawal has no creation-time event
+ * of its own — `newCommitmentHashL1` only becomes public here, on the SAME
+ * event that burns its parent's nullifier. That is what lets a client walk its
+ * own known notes' spend history and reconstruct every change note after a
+ * wiped browser, the same way `/l1/deposits` lets it reconstruct deposits.
+ */
+l1Router.get(
+  "/l1/withdrawals",
+  handler(
+    async (req, res) => {
+      const logs = await readL1Event(withdrawnEvent, withdrawnKey, {
+        force: req.query.refresh === "1",
+      });
+      const withdrawals = logs.map(parseWithdrawalLog);
+      return sendJson(res, {
+        withdrawals: withdrawals.map((w) => ({
+          newCommitment: w.newCommitment,
+          withdrawnValue: w.withdrawn,
+          spentNullifierHash: w.spentNullifier,
+          blockNumber: w.blockNumber,
+          transactionHash: w.transactionHash,
+        })),
+      });
+    },
+    { fallback: "Unable to index withdrawals" },
+  ),
+);
+
 l1Router.get("/l1/state-proof/:commitment", async (req, res) => {
   if (!l1Indexable()) return res.status(503).json({ error: "L1 pool indexing is not configured" });
   const { poolAddress, rpcUrl } = getL1();

@@ -44,6 +44,9 @@ miscRouter.get("/rpc-metrics", (_req, res) => {
 miscRouter.get("/quote", (_req, res) => {
   const feeBps = Number(process.env.RELAY_FEE_BPS ?? "30");
   res.json({
+    // `bps` is the raw figure `bridgedValueAfterFee` (bridge-flow.js) expects.
+    // `feeBps`/`feeLabel` stay in their existing percent shape for display.
+    bps: feeBps,
     feeBps: feeBps / 100,
     feeLabel: `${feeBps / 100}%`,
     gasCovered: true,

@@ -100,7 +100,10 @@
 .vault-recovery .secondary-btn{width:100%;margin-top:10px;padding:12px;box-shadow:3px 3px 0 var(--ink)}
 
 /* Balance */
-.balance-card{border:4px solid var(--ink);background:var(--yellow);box-shadow:5px 5px 0 var(--ink);padding:22px}
+.balance-card{border:4px solid var(--ink);background:var(--yellow);box-shadow:5px 5px 0 var(--ink);padding:22px;position:relative}
+/* ACTIVITY moved off the action row and onto this card's top-right corner. */
+.balance-activity{position:absolute;top:14px;right:14px;border:3px solid var(--ink);background:var(--paper);box-shadow:3px 3px 0 var(--ink);padding:8px 11px;font:700 11px 'DM Mono';letter-spacing:1px}
+.balance-activity:hover{background:var(--teal)}
 .balance-card .eyebrow{opacity:.7}
 .big-balance{font:700 46px 'Space Grotesk',sans-serif;letter-spacing:-2px;line-height:1;margin-top:8px}
 .big-balance small{font:500 17px 'DM Mono';letter-spacing:0}
@@ -147,12 +150,16 @@
 .vnote strong{display:block;font-size:18px}
 .vnote small{display:block;font:11px 'DM Mono';color:#666;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .vnote small.note-eta{margin-top:7px;color:var(--ink);font-size:9px;font-weight:700;letter-spacing:.35px;white-space:normal}
+/* Per-note mark: a cut-paper sigil, deliberately square where the address identicon
+   sits in a circle-free grid of its own — see note-mark.js on why the two must not
+   read as one family. Nudged off-square so it looks stuck on rather than printed. */
+.note-mark{display:block;flex:none;border:2px solid var(--ink);line-height:0;transform:rotate(-2deg);background:var(--paper)}
+.note-sigil{display:block}
+.vnote small.note-name{margin-top:5px;color:var(--ink);font-weight:700;letter-spacing:1.1px;font-size:10px}
 .vnote[role=button]{cursor:pointer}
 .vnote[role=button]:hover{background:var(--yellow)}
 .vnote[role=button]:focus-visible{outline:4px solid var(--blue);outline-offset:2px}
 .vnote.is-past{opacity:.5}
-.note-more{align-self:flex-end;margin-top:10px;border:3px solid var(--ink);background:var(--paper);padding:7px 10px;font:700 10px 'DM Mono';letter-spacing:.5px;box-shadow:3px 3px 0 var(--ink)}
-.note-more:hover{background:var(--yellow)}
 .spinner{display:inline-block;width:12px;height:12px;margin-right:7px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-2px;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 
@@ -198,6 +205,7 @@
 .bridge-option b{font:700 12px 'DM Mono';letter-spacing:.5px}
 .bridge-option small{margin-top:5px;color:#666;font:500 9px 'DM Mono'}
 .bridge-option-icon{display:grid;place-items:center;flex:none;width:34px;height:34px;border:3px solid var(--ink);border-radius:50%;background:var(--route-color,var(--teal));font:700 10px 'DM Mono'}
+.bridge-option .note-mark{border-width:3px}
 .bridge-option .pill{margin-left:auto}
 .bridge-option.is-disabled{opacity:.45;cursor:not-allowed}
 .bridge-choice .note-empty{grid-column:1/-1;margin:0}
@@ -357,7 +365,12 @@
 .notes-detail-list::-webkit-scrollbar-thumb{background:var(--ink)}
 .notes-detail .vnote{align-items:flex-start;min-height:112px;margin-top:13px;padding:16px 14px;box-shadow:5px 5px 0 var(--ink)}
 .notes-detail .vnote:first-child{margin-top:2px}
+/* The chain icon is redundant inside a single-route list — every row shares it — so the
+   note mark takes the slot, and takes the size that goes with being the leading visual. */
 .notes-detail .vnote>.note-icon{display:none}
+.notes-detail .note-mark{border-width:3px;margin-top:2px}
+.notes-detail .note-sigil{width:46px;height:46px}
+.notes-detail .vnote small.note-name{font-size:12px;letter-spacing:1.4px}
 .notes-detail .vnote strong{font-size:25px;letter-spacing:-.7px}
 .notes-detail .vnote small{margin-top:8px;font-size:10px}
 .notes-detail .vnote .pill{align-self:flex-start;background:var(--ink);color:var(--paper);border-width:2px;padding:8px 9px;font-size:9px}
@@ -381,6 +394,90 @@
 .transit-identity-actions .secondary-btn{border-width:2px;box-shadow:4px 4px 0 var(--ink);padding:13px}
 .transit-identity-actions .secondary-btn:disabled{box-shadow:none;border-style:dashed;background:transparent;color:#888;cursor:not-allowed}
 .transit-identity .identity-note{margin:8px 0 18px;font:500 11px 'DM Mono'}
+
+/* --- Shielded-address credential card: ticket stub (identicon) + perforation + details --- */
+.identicon{display:block;border:2px solid var(--ink)}
+/* The vault mark sits between the address and LOCK, and matches LOCK's height
+   exactly — `.wallet` is a flex row that stretches its children, so the mark
+   takes the row's height and the svg scales into it. The extra left margin is
+   the gap that separates the mark from the address. */
+.topbar-identicon{display:flex;align-self:stretch;margin-left:20px;border:4px solid var(--ink);box-shadow:4px 4px 0 var(--ink);background:var(--paper);line-height:0}
+.topbar-identicon .identicon{height:100%;width:auto;display:block}
+/* The note a deposit just created, shown under the button on the view that
+   made it rather than as a notice on the dashboard. */
+.deposit-result{border:5px solid var(--ink);box-shadow:6px 6px 0 var(--ink);background:var(--teal);margin-top:26px;padding:24px}
+.deposit-result-head{display:flex;flex-direction:column;gap:6px;margin-bottom:18px}
+.deposit-result-head strong{font-size:24px;line-height:1.2}
+.deposit-result .vnote{margin-top:0;border-width:4px}
+.deposit-result .vnote div{flex:1;min-width:0}
+.deposit-result .vnote strong{display:block;font-size:19px}
+.deposit-result .vnote small{display:block;font:12px 'DM Mono';color:#666;margin-top:4px}
+.deposit-result-note-hint{margin:14px 0 0;font:500 13px 'DM Mono';line-height:1.5}
+.deposit-result-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:20px}
+.deposit-result-actions .secondary-btn{flex:1 1 auto}
+
+/* The withdraw amount and what comes out of it are one bordered object: the
+   input keeps the outer border, the breakdown rows hang off its bottom edge
+   with hairline dividers, and the delivered figure closes it in the card's
+   yellow. The input's own margin is dropped so nothing separates them. */
+.amount-stack{border:5px solid var(--ink);margin-bottom:25px}
+.amount-stack .amount-field{border:0;margin-bottom:0;height:150px}
+.amount-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 30px;border-top:4px solid var(--ink);background:var(--paper);font:500 15px 'DM Mono'}
+.amount-row span:last-child{font-weight:700;white-space:nowrap}
+.amount-total{background:var(--yellow);font:700 17px 'Space Grotesk';letter-spacing:1px;padding:20px 30px}
+.amount-total span:last-child{font-size:26px}
+.amount-aside{color:#555;font-size:13px}
+
+/* A resolved recipient's mark sits on the right edge of the address field it
+   was looked up from. Padding on the input keeps long addresses from running
+   under it. */
+.input-with-mark{position:relative}
+.input-with-mark input{padding-right:64px}
+.input-mark{position:absolute;right:14px;top:50%;transform:translateY(-50%);display:block;width:34px;height:34px;border:3px solid var(--ink);overflow:hidden;line-height:0}
+.transit-identity.credential-card{margin-top:26px;padding:24px;border:5px solid var(--ink);box-shadow:var(--shadow);background:var(--yellow)}
+.credential-heading{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
+.credential-heading h2{margin:0;flex:1 1 auto}
+.registry-badge{border:3px solid var(--ink);background:var(--paper);padding:7px 11px;font:700 9px 'DM Mono';letter-spacing:1.5px;box-shadow:3px 3px 0 var(--ink)}
+.credential-card .identity-note{color:#444}
+.credential-body{display:flex;margin-top:20px;border:4px solid var(--ink);background:var(--paper)}
+.credential-stub{flex:none;width:172px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:22px 16px;text-align:center}
+.credential-stub .eyebrow{color:#777}
+.fingerprint-caption{margin:0;font:500 10px 'DM Mono';line-height:1.6;color:#666}
+.credential-perforation{flex:none;width:0;border-left:3px dashed var(--ink);margin:16px 0}
+.credential-details{flex:1;min-width:0;padding:22px 26px;display:flex;flex-direction:column;gap:16px}
+.credential-field{display:flex;flex-direction:column;gap:6px}
+.credential-field .eyebrow{color:#777}
+.credential-field code{font:500 12px 'DM Mono';word-break:break-all;line-height:1.5}
+.credential-details .shielded-key-row:nth-child(1)>span{color:var(--blue)}
+.credential-details .shielded-key-row:nth-child(2)>span{color:var(--pink)}
+.key-value{display:flex;flex-direction:column;gap:3px;min-width:0}
+.key-value small{color:#888;font:500 8px 'DM Mono';letter-spacing:1.2px}
+.copy-meta-address{width:100%;margin-top:2px}
+/* Copy confirmation. Fixed to the viewport so a re-render cannot orphan it. */
+.copied-sticker{position:fixed;z-index:60;pointer-events:none;background:var(--teal);border:3px solid var(--ink);box-shadow:3px 3px 0 var(--ink);padding:6px 10px;font:700 10px 'DM Mono';letter-spacing:1.5px;white-space:nowrap;animation:copied-pop 1.15s ease forwards}
+@keyframes copied-pop{
+  0%{opacity:0;transform:translateY(-50%) rotate(-3deg) scale(.8)}
+  14%{opacity:1;transform:translateY(-50%) rotate(-3deg) scale(1)}
+  70%{opacity:1;transform:translateY(-50%) rotate(-3deg) scale(1)}
+  100%{opacity:0;transform:translateY(-140%) rotate(-3deg) scale(1)}
+}
+@media(prefers-reduced-motion:reduce){
+  .copied-sticker{animation:copied-fade 1.15s ease forwards}
+  @keyframes copied-fade{0%,80%{opacity:1;transform:translateY(-50%) rotate(-3deg)}100%{opacity:0;transform:translateY(-50%) rotate(-3deg)}}
+}
+.credential-footer{display:flex;flex-wrap:wrap;gap:8px 20px;justify-content:space-between;margin-top:18px;padding-top:14px;border-top:2px dashed var(--ink);font:500 10px 'DM Mono';letter-spacing:1px;color:#555}
+@media(max-width:1000px){
+  .credential-stub{width:150px;padding:18px 12px}
+  .credential-details{padding:18px 20px}
+}
+@media(max-width:650px){
+  .credential-body{flex-direction:column}
+  .credential-stub{width:auto;padding:18px}
+  .credential-perforation{width:auto;height:0;border-left:0;border-top:3px dashed var(--ink);margin:0}
+  .credential-details{padding:18px}
+  .meta-address-code{font-size:9px}
+  .credential-footer{flex-direction:column;align-items:flex-start;gap:6px}
+}
 
 /* Ragequit is intentionally visually separate from ordinary private flows. */
 .ragequit-panel{border-color:#8f2017;background:#fff8f0}
@@ -459,4 +556,25 @@
 .activity-row small{white-space:normal;overflow:visible;word-break:break-word}
 .activity-row .tx-link{margin-top:9px;padding:7px 10px;font-size:9px;box-shadow:2px 2px 0 var(--ink)}
 .activity-row.is-public{background:#fdece7}
+/* The row's note sigil sits beside the kind icon; the rest of the row is
+   top-aligned, so nudge it onto the title's optical line. */
+.activity-row .note-mark{margin-top:2px}
 .activity-age{flex:none;align-self:center;border:2px solid var(--ink);background:var(--cream);padding:7px 9px;font:700 9px 'DM Mono';letter-spacing:1px;white-space:nowrap}
+
+/* Anonymity-set indicator. Tone is the message: how big the crowd is matters more
+   than the exact figure, so the colour carries it before the number is read. */
+.anon-set{display:flex;align-items:center;gap:16px;border:4px solid var(--ink);background:var(--paper);padding:16px 18px;margin:-10px 0 25px}
+.anon-set b{font-size:34px;line-height:1;flex:none;min-width:52px;text-align:center}
+.anon-set span{font:500 13px/1.45 'DM Mono';flex:1}
+.anon-set.is-ok{background:var(--teal)}
+.anon-set.is-thin{background:var(--yellow)}
+.anon-set.is-alone{background:var(--orange)}
+.anon-suggest{flex:none;border:3px solid var(--ink);background:var(--paper);box-shadow:3px 3px 0 var(--ink);padding:10px 12px;font:700 11px 'DM Mono';letter-spacing:1px}
+.anon-suggest:active{box-shadow:none;transform:translate(3px,3px)}
+@media(max-width:650px){.anon-set{flex-wrap:wrap;gap:12px}.anon-set span{flex:1 1 100%;order:3}}
+.error-hint{border-top:3px solid var(--ink);padding-top:14px;font:500 13px/1.5 'DM Mono'}
+.notes-toolbar{display:flex;gap:12px;margin:18px 0 6px}
+.notes-search{flex:1;min-width:0;border:4px solid var(--ink);background:var(--paper);padding:13px 15px;font:500 13px 'DM Mono';outline:0}
+.notes-search:focus{box-shadow:4px 4px 0 var(--ink)}
+.notes-sort{flex:none;min-width:96px}
+.proving-elapsed{font:500 14px 'DM Mono';border:3px solid var(--ink);background:var(--paper);padding:3px 8px;margin-left:10px;vertical-align:middle}

@@ -73,6 +73,18 @@ describe("buildActivity", () => {
     const entries = buildActivity([{ value: "1", status: "ready", legacy: true }], {}, label);
     assert.match(entries[0].detail, /legacy/);
   });
+
+  // A change note never came from the user's wallet — logging it as a DEPOSIT
+  // would fabricate a deposit that never happened.
+  it("logs a change note as CHANGE, never as a deposit", () => {
+    const entries = buildActivity([{
+      index: "0", value: "60", status: "ready", changeFrom: "0xparent", changeAt: 30,
+    }], {}, label);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].kind, "change");
+    assert.equal(entries[0].at, 30);
+    assert.ok(!entries.some((e) => e.kind === "deposit"));
+  });
 });
 
 describe("relativeTime", () => {
@@ -87,5 +99,37 @@ describe("relativeTime", () => {
   it("says nothing for an undated event", () => {
     assert.equal(relativeTime(null, now), "");
     assert.equal(relativeTime(0, now), "");
+  });
+});
+
+describe("activity note identity", () => {
+  const label = (key) => (key === "op" ? "OP Sepolia" : key);
+
+  // The log shows each row's note sigil and name (note-mark.js), the same mark
+  // the notes list shows, so a user can tie a log line back to the note it is
+  // about. That needs the note's id on every entry, not just withdrawals.
+  it("carries the note's commitment onto every note-derived entry", () => {
+    const entries = buildActivity([{
+      index: "0", commitment: "0xabc", value: "1000", status: "spent",
+      depositedAt: 1, spentAt: 2, spentTo: "op",
+    }], {}, label);
+    assert.deepEqual(entries.map((e) => e.kind), ["bridge", "deposit"]);
+    assert.ok(entries.every((e) => e.id === "0xabc"));
+  });
+
+  it("carries the commitment onto change and ragequit entries", () => {
+    const change = buildActivity([{ commitment: "0xc", changeFrom: "0xp", value: "5", changeAt: 3 }], {}, label);
+    assert.equal(change[0].kind, "change");
+    assert.equal(change[0].id, "0xc");
+
+    const quit = buildActivity([{
+      index: "1", commitment: "0xq", value: "5", status: "spent", spentBy: "ragequit", spentAt: 4,
+    }], {}, label);
+    assert.equal(quit.find((e) => e.kind === "ragequit").id, "0xq");
+  });
+
+  it("leaves id null for a note with no commitment rather than inventing one", () => {
+    const entries = buildActivity([{ index: "0", value: "1" }], {}, label);
+    assert.equal(entries[0].id, null);
   });
 });

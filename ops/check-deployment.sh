@@ -388,6 +388,48 @@ section "8. packages/sdk"
 # the SDK is a library that takes addresses from callers -- nothing here can drift.
 ok "no address surface (SDK takes config from callers; only HYPERSYNC_API_KEY is read, in tests)"
 
+# The SDK's packaged proving keys must satisfy the verifiers that are actually deployed.
+# `yarn setup:all` re-runs the phase-2 contribution with fresh randomness, which changes
+# `delta` while leaving the circuit -- and therefore every local check, including the
+# client's own verifyProof -- passing. The only symptom is `InvalidProof()` from the
+# chain, arriving long after the cause. Comparing the packaged delta against the
+# verifier sources catches that at the point the keys change instead.
+MANIFEST=packages/sdk/dist/node/artifacts/manifest.json
+
+check_vkey_delta() {
+  local label=$1 artifact=$2 sol=$3 field want got missing=0
+  if [ ! -f "$sol" ]; then skip "$label: $sol not found"; return; fi
+  if ! jq -e --arg a "$artifact" '.artifacts[$a]' "$MANIFEST" >/dev/null 2>&1; then
+    warn "$label: $artifact absent from the artifact manifest (run 'yarn build' in packages/sdk)"
+    return
+  fi
+  for field in x1 x2 y1 y2; do
+    want=$(jq -r --arg a "$artifact" --arg f "$field" '.artifacts[$a].delta[$f]' "$MANIFEST")
+    got=$(grep -Eo "uint256 constant delta${field}[[:space:]]*=[[:space:]]*[0-9]+" "$sol" | grep -Eo '[0-9]+$')
+    if [ -z "$got" ]; then warn "$label: delta${field} not found in $(basename "$sol")"; return; fi
+    [ "$want" != "$got" ] && missing=1
+  done
+  if [ "$missing" = 0 ]; then
+    ok "$label verifier matches the packaged proving key"
+  else
+    bad "$label verifier was built from DIFFERENT keys than the SDK ships\n        every proof will revert with InvalidProof() -- regenerate $(basename "$sol") from\n        the current vkey and redeploy, or restore the keys the verifier was built from"
+  fi
+}
+
+if [ ! -f "$MANIFEST" ]; then
+  warn "no artifact manifest at $MANIFEST -- run 'yarn build' in packages/sdk"
+else
+  check_vkey_delta "withdrawL1" withdrawL1 packages/contracts/src/contracts/verifiers/WithdrawalVerifier.sol
+  check_vkey_delta "withdrawL2" withdrawL2 packages/contracts/src/contracts/verifiers/L2WithdrawalVerifier.sol
+  check_vkey_delta "commitment" commitment packages/contracts/src/contracts/verifiers/CommitmentVerifier.sol
+  # Development keys are fine on a testnet and disqualifying on mainnet, so state
+  # which is which rather than letting a TODO in copy_circuits.sh carry it alone.
+  DEV_KEYS=$(jq -r '[.artifacts | to_entries[] | select(.value.provenance != "ceremony") | .key] | join(", ")' "$MANIFEST")
+  if [ -n "$DEV_KEYS" ]; then
+    warn "development Groth16 keys packaged for: $DEV_KEYS ${DIM}(a ceremony must replace these before mainnet)${RST}"
+  fi
+fi
+
 # =============================================================================
 section "9. Stale records"
 note "Records bound to a non-canonical L1. Kept as history -- never wire these."
@@ -424,6 +466,34 @@ if [ "$ONCHAIN" = 1 ]; then
       ok "L1 pool has code"
       onchain_scope=$(cast call "$L1_POOL" "SCOPE()(uint256)" --rpc-url "$L1_RPC" 2>/dev/null | awk '{print $1}')
       [ -n "$onchain_scope" ] && cmp_exact "L1 SCOPE() on chain" "$L1_SCOPE" "$onchain_scope"
+
+      # Section 8 compared the packaged key against the verifier SOURCE. That is only
+      # as good as the assumption that the source is what got deployed -- regenerating
+      # a verifier without redeploying breaks it. The deployed bytecode is the ground
+      # truth, and a Groth16 verifier embeds delta as plain 32-byte constants, so the
+      # check is a substring search rather than a call (there is no getter to call).
+      # WITHDRAWAL_VERIFIER is immutable, so a mismatch here means redeploying the pool.
+      if [ -f "$MANIFEST" ]; then
+        verifier=$(cast call "$L1_POOL" "WITHDRAWAL_VERIFIER()(address)" --rpc-url "$L1_RPC" 2>/dev/null | awk '{print $1}')
+        if [ -z "$verifier" ]; then
+          warn "WITHDRAWAL_VERIFIER() call failed -- cannot verify the deployed proving key"
+        else
+          vcode=$(cast code "$verifier" --rpc-url "$L1_RPC" 2>/dev/null | tr 'A-F' 'a-f')
+          want_delta=$(jq -r '.artifacts.withdrawL1.delta.x1 // empty' "$MANIFEST")
+          if [ -z "$vcode" ] || [ "$vcode" = 0x ]; then
+            bad "no code at WITHDRAWAL_VERIFIER $verifier"
+          elif [ -z "$want_delta" ]; then
+            warn "withdrawL1 absent from the artifact manifest -- cannot verify the deployed key"
+          else
+            want_word=$(cast to-uint256 "$want_delta" 2>/dev/null | sed 's/^0x//' | tr 'A-F' 'a-f')
+            if printf '%s' "$vcode" | grep -q "$want_word"; then
+              ok "deployed WithdrawalVerifier $verifier matches the packaged proving key"
+            else
+              bad "deployed WithdrawalVerifier $verifier was built from DIFFERENT keys\n        every withdrawal will revert with InvalidProof(). WITHDRAWAL_VERIFIER is immutable,\n        so this needs a pool redeploy against the current vkey."
+            fi
+          fi
+        fi
+      fi
     fi
 
     code=$(cast code "$ENTRYPOINT" --rpc-url "$L1_RPC" 2>/dev/null)

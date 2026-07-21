@@ -7,6 +7,16 @@ export default defineConfig({
       assert: fileURLToPath(new URL("./src/assert-shim.js", import.meta.url)),
     },
   },
+  /**
+   * The proving worker (src/prover.worker.js) dynamically imports the SDK, which
+   * code-splits. Vite's default worker format is `iife`, and an IIFE bundle cannot
+   * be split — the build fails outright rather than degrading. ES workers are
+   * supported everywhere `import.meta.url` workers are, and `prove.js` falls back
+   * to main-thread proving on browsers where the worker will not start at all.
+   */
+  worker: {
+    format: "es",
+  },
   server: {
     proxy: {
       "/api": "http://localhost:8787",

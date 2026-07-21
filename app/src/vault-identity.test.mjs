@@ -58,6 +58,59 @@ test("disables an unpublished address action while another operation is busy", (
   assert.match(html, /id="register-keys"[^>]*disabled/);
 });
 
+test("renders the credential card as a ticket stub with an identicon fingerprint", () => {
+  const html = renderVaultIdentityControls({ shielded, account: "0x1234", registered: true, busy: false });
+
+  assert.match(html, /<svg class="identicon"/);
+  assert.match(html, /FINGERPRINT/);
+  assert.match(html, /check this matches/i);
+  // Never word the fingerprint as authentication — it is a change detector only.
+  assert.doesNotMatch(html, /\bverifies\b|\bconfirms\b|\bproves\b|\bauthenticated\b/i);
+});
+
+test("key panels are labelled as 64-byte Baby Jubjub points, never secp256k1", () => {
+  const html = renderVaultIdentityControls({ shielded, account: "0x1234", registered: true, busy: false });
+
+  assert.match(html, /64 bytes · Baby Jubjub/);
+  assert.doesNotMatch(html, /secp256k1/i);
+});
+
+test("offers the L1 address as the handle, not a meta-address blob", () => {
+  const html = renderVaultIdentityControls({ shielded, account: "0x1234", registered: true, busy: false });
+
+  // `resolveRecipient` looks recipients up BY ADDRESS, so the address is the only
+  // handle a sender can act on. A displayed meta-address is a string the app
+  // cannot consume and that only ERC-5564 tooling would misparse.
+  assert.match(html, /data-copy-shielded="0x1234" data-copy-label="Address"/);
+  assert.match(html, />COPY ADDRESS</);
+  assert.doesNotMatch(html, /SHIELDED META-ADDRESS/);
+  assert.doesNotMatch(html, /st:eth:/);
+  assert.doesNotMatch(html, /cutout:eth:/);
+  // The 64-hex-limb rendering is what made the blob unreadable; it must not return.
+  assert.doesNotMatch(html, /[0-9a-f]{64}/);
+});
+
+test("cannot offer to copy an address before a wallet is connected", () => {
+  const html = renderVaultIdentityControls({ shielded, account: "", registered: null, busy: false });
+  assert.match(html, /<button[^>]*copy-meta-address[^>]*disabled[^>]*>COPY ADDRESS</);
+  assert.doesNotMatch(html, /data-copy-label="Address"/);
+});
+
+test("labels the domain-separated scheme, never a bare ERC-5564 scheme index", () => {
+  const html = renderVaultIdentityControls({ shielded, account: "0x1234", registered: true, busy: false });
+
+  assert.match(html, /SCHEME · CUTOUT-BJJ/);
+  assert.doesNotMatch(html, /SCHEME #1/i);
+});
+
+test("badges the registry as registered, not as ERC-5564 conformant", () => {
+  const html = renderVaultIdentityControls({ shielded, account: "0x1234", registered: true, busy: false });
+
+  assert.match(html, /ERC-6538 REGISTERED/);
+  assert.doesNotMatch(html, /ERC-6538 COMPLIANT/i);
+  assert.doesNotMatch(html, /ERC-5564 COMPLIANT/i);
+});
+
 test("integrates identity controls through homeView rather than the shared app shell", async () => {
   const source = await readFile(new URL("./main.js", import.meta.url), "utf8");
   const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
@@ -66,4 +119,34 @@ test("integrates identity controls through homeView rather than the shared app s
 
   assert.doesNotMatch(appShellSource, /renderVaultIdentityControls|vaultAddressTile/);
   assert.match(homeViewSource, /renderVaultIdentityControls/);
+});
+
+test("wires the identicon into the topbar (loaded-vault check) and the send panel (resolved-recipient check)", async () => {
+  const source = await readFile(new URL("./main.js", import.meta.url), "utf8");
+  const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
+  const topbarSource = section("function topbar()", "function footer()");
+  const sendViewSource = section("function sendView()", "function receiveView()");
+
+  const fingerprintSource = section("function sendFingerprint(", "function sendView(");
+
+  assert.match(source, /import \{ renderIdenticon \} from "\.\/identicon\.js"/);
+  // Topbar only shows the mark once an identity is actually loaded.
+  assert.match(topbarSource, /state\.identity \?/);
+  assert.match(topbarSource, /renderIdenticon\(state\.identity\.shielded/);
+  assert.match(sendViewSource, /sendFingerprint\(send, recipientMode\)/);
+  assert.match(fingerprintSource, /renderIdenticon\(send\.resolved/);
+});
+
+test("shows a recipient mark only for a looked-up user, on the right edge of the address field", async () => {
+  const source = await readFile(new URL("./main.js", import.meta.url), "utf8");
+  const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
+  const fingerprintSource = section("function sendFingerprint(", "function sendView(");
+  const sendViewSource = section("function sendView()", "function receiveView()");
+
+  // A self-bridge gets no mark: the vault's own fingerprint is already in the
+  // topbar, so a second copy asks the user to compare it against itself.
+  assert.match(fingerprintSource, /recipientMode !== "other"/);
+  assert.doesNotMatch(fingerprintSource, /state\.identity/);
+  // The mark lives inside the recipient address field, not as a standalone card.
+  assert.match(sendViewSource, /<div class="input-with-mark">[\s\S]*id="send-recipient"[\s\S]*sendFingerprint\(send, recipientMode\)[\s\S]*<\/div>/);
 });
