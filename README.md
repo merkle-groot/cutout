@@ -1,6 +1,6 @@
-# Cutout: Cross-Chain Private Withdrawals over a Single L1 Privacy Pool
+# f5: Cross-Chain Private Withdrawals over a Single L1 Privacy Pool
 
-Cutout is a single Privacy Pool on Ethereum L1 whose **only** withdrawal path is a private,
+f5 is a single Privacy Pool on Ethereum L1 whose **only** withdrawal path is a private,
 cross-chain delivery: spend an L1 note, canonically bridge its value to a destination L2 shielded
 pool, and deliver a **stealth commitment** into that pool. No public address ever touches the value
 on either side.
@@ -466,7 +466,7 @@ relayer; ERC-6538 publishing; server-side Garaga calldata conversion (no Python 
 1. **Unified cross-chain note.** A note in the L2-A shielded pool spendable on L2-B without
    pre-committing a destination. Requires reconciled nullifier sets across chains;
    L1-as-single-nullifier-oracle is the sound design but pays the L2→L1 slow leg (a week on
-   optimistic rollups). The highest-leverage question, and the one that would make Cutout
+   optimistic rollups). The highest-leverage question, and the one that would make f5
    unambiguously not a wrapper.
 2. **Gas delivery on destination.** Every recipient lands with a shielded note and zero native L2
    gas. With no clear-EOA fallback this is blocking, not optional. Options: the relayer reimbursed
